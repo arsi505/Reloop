@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'Reloop | E-commerce Reliability & Recovery Engine',
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="bg-slate-900 text-slate-100 min-h-screen">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

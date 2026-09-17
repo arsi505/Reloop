@@ -13,7 +13,8 @@
                     "test":  "npm run test --workspaces --if-present",
                     "typecheck":  "npm run typecheck --workspaces --if-present",
                     "db:validate":  "npm run db:validate --workspace=@reloop/database",
-                    "db:generate":  "npm run db:generate --workspace=@reloop/database"
+                    "db:generate":  "npm run db:generate --workspace=@reloop/database",
+                    "db:migrate":  "npm run db:migrate --workspace=@reloop/database"
                 },
     "devDependencies":  {
                             "@typescript-eslint/eslint-plugin":  "^7.18.0",

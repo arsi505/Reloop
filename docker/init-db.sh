@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+
+APP_USER="${APP_DATABASE_USER:-reloop_app}"
+APP_PASSWORD="${APP_DATABASE_PASSWORD}"
+
+if [ -z "$APP_PASSWORD" ]; then
+  echo "Error: APP_DATABASE_PASSWORD environment variable is required for database initialization."
+  exit 1
+fi
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+  DO \$\$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$APP_USER') THEN
+      CREATE USER "$APP_USER" WITH PASSWORD '$APP_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    ELSE
+      ALTER USER "$APP_USER" WITH PASSWORD '$APP_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    END IF;
+  END
+  \$\$;
+
+  SELECT 'CREATE DATABASE reloop_shadow OWNER "$APP_USER"'
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'reloop_shadow')\gexec
+
+  SELECT 'CREATE DATABASE reloop_test OWNER "$APP_USER"'
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'reloop_test')\gexec
+
+  ALTER DATABASE "$POSTGRES_DB" OWNER TO "$APP_USER";
+  GRANT ALL PRIVILEGES ON DATABASE "$POSTGRES_DB" TO "$APP_USER";
+  GRANT ALL PRIVILEGES ON DATABASE reloop_shadow TO "$APP_USER";
+  GRANT ALL PRIVILEGES ON DATABASE reloop_test TO "$APP_USER";
+EOSQL
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+  GRANT ALL ON SCHEMA public TO "$APP_USER";
+  ALTER SCHEMA public OWNER TO "$APP_USER";
+EOSQL
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "reloop_shadow" <<-EOSQL
+  GRANT ALL ON SCHEMA public TO "$APP_USER";
+  ALTER SCHEMA public OWNER TO "$APP_USER";
+EOSQL
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "reloop_test" <<-EOSQL
+  GRANT ALL ON SCHEMA public TO "$APP_USER";
+  ALTER SCHEMA public OWNER TO "$APP_USER";
+EOSQL
