@@ -7,7 +7,7 @@
     "start": "node dist/main.js",
     "dev": "ts-node src/main.ts",
     "test": "jest",
-    "test:e2e": "jest --config test/jest-e2e.json",
+    "test:e2e": "jest --config test/jest-e2e.json --runInBand",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\""
   },

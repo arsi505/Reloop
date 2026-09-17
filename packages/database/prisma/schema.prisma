@@ -8,6 +8,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// ==========================================
+// Day 3 Authentication & Tenancy Enums
+// ==========================================
+
 enum Role {
   OWNER
   ADMIN
@@ -15,27 +19,184 @@ enum Role {
   VIEWER
 }
 
+// ==========================================
+// Day 5 Core Reliability Data Model Enums
+// ==========================================
+
+enum IntegrationProvider {
+  SHOPIFY
+  SHIPSTATION
+  GENERIC_3PL
+  SIMULATOR
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DEGRADED
+  DISCONNECTED
+  ERROR
+}
+
+enum OperationalMode {
+  OBSERVE
+  RECOMMEND
+  APPROVAL
+  SAFE_AUTO_RECOVERY
+}
+
+enum ExternalOrderStatus {
+  PENDING
+  READY_FOR_FULFILLMENT
+  FULFILLING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  UNKNOWN
+}
+
+enum IntegrationEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED_DUPLICATE
+}
+
+enum RecoveryCaseType {
+  TEMPORARY_API_FAILURE
+  TRACKING_MISSING_IN_SHOPIFY
+  STUCK_ORDER
+  ORDER_MISSING_AT_3PL
+  SHIPPED_AT_3PL_UNFULFILLED_AT_SHOPIFY
+  INVENTORY_MISMATCH
+  DUPLICATE_RISK
+  INVALID_ORDER_DATA
+}
+
+enum RecoveryLevel {
+  AUTO_RECOVER
+  AUTO_INVESTIGATE
+  REQUIRE_APPROVAL
+  BLOCK
+}
+
+enum RecoveryCaseStatus {
+  OPEN
+  INVESTIGATING
+  READY_FOR_RECOVERY
+  AUTO_RECOVERING
+  WAITING_APPROVAL
+  RECOVERING
+  VERIFYING
+  RESOLVED
+  BLOCKED
+  FAILED
+}
+
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  WAITING
+  SUCCEEDED
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
+enum WorkflowStepStatus {
+  PENDING
+  READY
+  RUNNING
+  WAITING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+  BLOCKED
+}
+
+enum JobStatus {
+  QUEUED
+  CLAIMED
+  RUNNING
+  RETRY_WAITING
+  WAITING_APPROVAL
+  SUCCEEDED
+  FAILED
+  BLOCKED
+  DEAD_LETTERED
+  CANCELLED
+}
+
+enum JobAttemptStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  ABANDONED
+}
+
+enum JobErrorCategory {
+  TRANSIENT
+  RATE_LIMITED
+  BUSINESS_ERROR
+  AUTH_ERROR
+  NOT_FOUND
+  DUPLICATE
+  UNKNOWN
+}
+
+enum WorkerStatus {
+  ONLINE
+  BUSY
+  DRAINING
+  OFFLINE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+// ==========================================
+// Day 3 Models (Preserved & Extended)
+// ==========================================
+
 model User {
-  id              String               @id @default(uuid()) @db.Uuid
-  email           String               @unique
-  name            String
-  passwordHash    String               @map("password_hash")
-  createdAt       DateTime             @default(now()) @map("created_at")
-  updatedAt       DateTime             @updatedAt @map("updated_at")
-  memberships     OrganizationMember[]
-  refreshSessions RefreshSession[]
+  id                    String               @id @default(uuid()) @db.Uuid
+  email                 String               @unique
+  name                  String
+  passwordHash          String               @map("password_hash")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  memberships           OrganizationMember[]
+  refreshSessions       RefreshSession[]
+  assignedRecoveryCases RecoveryCase[]       @relation("AssignedRecoveryCases")
+  requestedApprovals    Approval[]           @relation("RequestedApprovals")
+  decidedApprovals      Approval[]           @relation("DecidedApprovals")
+  auditLogs             AuditLog[]
 
   @@map("users")
 }
 
 model Organization {
-  id              String               @id @default(uuid()) @db.Uuid
-  name            String
-  slug            String               @unique
-  createdAt       DateTime             @default(now()) @map("created_at")
-  updatedAt       DateTime             @updatedAt @map("updated_at")
-  members         OrganizationMember[]
-  refreshSessions RefreshSession[]
+  id                 String               @id @default(uuid()) @db.Uuid
+  name               String
+  slug               String               @unique
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  members            OrganizationMember[]
+  refreshSessions    RefreshSession[]
+  integrations       Integration[]
+  externalOrders     ExternalOrder[]
+  externalReferences ExternalReference[]
+  integrationEvents  IntegrationEvent[]
+  recoveryCases      RecoveryCase[]
+  workflows          Workflow[]
+  workflowSteps      WorkflowStep[]
+  jobs               Job[]
+  approvals          Approval[]
+  auditLogs          AuditLog[]
 
   @@map("organizations")
 }
@@ -75,4 +236,315 @@ model RefreshSession {
   @@index([organizationId])
   @@index([tokenHash])
   @@map("refresh_sessions")
+}
+
+// ==========================================
+// Day 5 Core Reliability Models
+// ==========================================
+
+model Integration {
+  id                 String              @id @default(uuid()) @db.Uuid
+  organizationId     String              @map("organization_id") @db.Uuid
+  provider           IntegrationProvider
+  name               String
+  status             IntegrationStatus   @default(CONNECTED)
+  mode               OperationalMode     @default(OBSERVE)
+  configuration      Json?               @default("{}")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  externalOrders     ExternalOrder[]
+  externalReferences ExternalReference[]
+  integrationEvents  IntegrationEvent[]
+  recoveryCases      RecoveryCase[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, provider])
+  @@map("integrations")
+}
+
+model ExternalOrder {
+  id                   String              @id @default(uuid()) @db.Uuid
+  organizationId       String              @map("organization_id") @db.Uuid
+  primaryIntegrationId String?             @map("primary_integration_id") @db.Uuid
+  externalOrderNumber  String              @map("external_order_number")
+  customerReference    String?             @map("customer_reference")
+  status               ExternalOrderStatus @default(PENDING)
+  currency             String?             @db.VarChar(3)
+  totalAmount          Decimal?            @map("total_amount") @db.Decimal(12, 2)
+  sourceCreatedAt      DateTime?           @map("source_created_at")
+  lastObservedAt       DateTime            @default(now()) @map("last_observed_at")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  organization         Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  primaryIntegration   Integration?        @relation(fields: [primaryIntegrationId], references: [id], onDelete: SetNull)
+  externalReferences   ExternalReference[]
+  recoveryCases        RecoveryCase[]
+
+  @@unique([organizationId, externalOrderNumber])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([primaryIntegrationId])
+  @@map("external_orders")
+}
+
+model ExternalReference {
+  id                String        @id @default(uuid()) @db.Uuid
+  organizationId    String        @map("organization_id") @db.Uuid
+  externalOrderId   String        @map("external_order_id") @db.Uuid
+  integrationId     String        @map("integration_id") @db.Uuid
+  resourceType      String        @map("resource_type")
+  externalId        String        @map("external_id")
+  externalReference String?       @map("external_reference")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  externalOrder     ExternalOrder @relation(fields: [externalOrderId], references: [id], onDelete: Cascade)
+  integration       Integration   @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, integrationId, resourceType, externalId])
+  @@index([organizationId])
+  @@index([externalOrderId])
+  @@index([integrationId])
+  @@index([organizationId, externalId])
+  @@map("external_references")
+}
+
+model IntegrationEvent {
+  id              String                 @id @default(uuid()) @db.Uuid
+  organizationId  String                 @map("organization_id") @db.Uuid
+  integrationId   String                 @map("integration_id") @db.Uuid
+  providerEventId String?                @map("provider_event_id")
+  eventType       String                 @map("event_type")
+  payload         Json
+  status          IntegrationEventStatus @default(RECEIVED)
+  receivedAt      DateTime               @default(now()) @map("received_at")
+  processedAt     DateTime?              @map("processed_at")
+  errorCode       String?                @map("error_code")
+  errorMessage    String?                @map("error_message")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  integration     Integration            @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([integrationId, providerEventId])
+  @@index([organizationId, status])
+  @@index([integrationId])
+  @@index([receivedAt])
+  @@map("integration_events")
+}
+
+model RecoveryCase {
+  id                  String             @id @default(uuid()) @db.Uuid
+  organizationId      String             @map("organization_id") @db.Uuid
+  externalOrderId     String?            @map("external_order_id") @db.Uuid
+  sourceIntegrationId String?            @map("source_integration_id") @db.Uuid
+  assignedUserId      String?            @map("assigned_user_id") @db.Uuid
+  type                RecoveryCaseType
+  recoveryLevel       RecoveryLevel      @map("recovery_level")
+  status              RecoveryCaseStatus @default(OPEN)
+  summary             String
+  detectedAt          DateTime           @default(now()) @map("detected_at")
+  resolvedAt          DateTime?          @map("resolved_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  externalOrder       ExternalOrder?     @relation(fields: [externalOrderId], references: [id], onDelete: SetNull)
+  sourceIntegration   Integration?       @relation(fields: [sourceIntegrationId], references: [id], onDelete: SetNull)
+  assignedUser        User?              @relation("AssignedRecoveryCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  workflows           Workflow[]
+  approvals           Approval[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, type])
+  @@index([externalOrderId])
+  @@index([sourceIntegrationId])
+  @@index([assignedUserId])
+  @@index([detectedAt])
+  @@map("recovery_cases")
+}
+
+model Workflow {
+  id              String         @id @default(uuid()) @db.Uuid
+  organizationId  String         @map("organization_id") @db.Uuid
+  recoveryCaseId  String         @map("recovery_case_id") @db.Uuid
+  templateKey     String         @map("template_key")
+  templateVersion Int            @default(1) @map("template_version")
+  status          WorkflowStatus @default(PENDING)
+  startedAt       DateTime?      @map("started_at")
+  completedAt     DateTime?      @map("completed_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recoveryCase    RecoveryCase   @relation(fields: [recoveryCaseId], references: [id], onDelete: Cascade)
+  steps           WorkflowStep[]
+  jobs            Job[]
+  approvals       Approval[]
+
+  @@index([organizationId])
+  @@index([recoveryCaseId])
+  @@index([organizationId, status])
+  @@map("workflows")
+}
+
+model WorkflowStep {
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @map("organization_id") @db.Uuid
+  workflowId      String             @map("workflow_id") @db.Uuid
+  key             String
+  name            String
+  position        Int                @default(0)
+  status          WorkflowStepStatus @default(PENDING)
+  input           Json?
+  output          Json?
+  startedAt       DateTime?          @map("started_at")
+  completedAt     DateTime?          @map("completed_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  dependsOnStepId String?            @map("depends_on_step_id") @db.Uuid
+  dependsOn       WorkflowStep?      @relation("WorkflowStepDependencies", fields: [dependsOnStepId], references: [id], onDelete: SetNull)
+  dependentSteps  WorkflowStep[]     @relation("WorkflowStepDependencies")
+
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow        Workflow           @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  jobs            Job[]
+  approvals       Approval[]
+
+  @@unique([workflowId, key])
+  @@index([workflowId, position])
+  @@index([organizationId])
+  @@index([dependsOnStepId])
+  @@map("workflow_steps")
+}
+
+model Job {
+  id                 String          @id @default(uuid()) @db.Uuid
+  organizationId     String          @map("organization_id") @db.Uuid
+  workflowId         String?         @map("workflow_id") @db.Uuid
+  workflowStepId     String?         @map("workflow_step_id") @db.Uuid
+  type               String
+  status             JobStatus       @default(QUEUED)
+  priority           Int             @default(0)
+  payload            Json            @default("{}")
+  attemptCount       Int             @default(0) @map("attempt_count")
+  maxAttempts        Int             @default(3) @map("max_attempts")
+  nextRunAt          DateTime        @default(now()) @map("next_run_at")
+  idempotencyKey     String          @map("idempotency_key")
+  claimedByWorkerId  String?         @map("claimed_by_worker_id") @db.Uuid
+  leaseExpiresAt     DateTime?       @map("lease_expires_at")
+  completedAt        DateTime?       @map("completed_at")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  organization       Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow           Workflow?       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowStep       WorkflowStep?   @relation(fields: [workflowStepId], references: [id], onDelete: Cascade)
+  claimedByWorker    Worker?         @relation(fields: [claimedByWorkerId], references: [id], onDelete: SetNull)
+  attempts           JobAttempt[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([status, nextRunAt])
+  @@index([organizationId, status])
+  @@index([workflowId])
+  @@index([workflowStepId])
+  @@index([leaseExpiresAt])
+  @@index([claimedByWorkerId])
+  @@map("jobs")
+}
+
+model Worker {
+  id              String       @id @default(uuid()) @db.Uuid
+  workerKey       String       @unique @map("worker_key")
+  status          WorkerStatus @default(ONLINE)
+  startedAt       DateTime     @default(now()) @map("started_at")
+  lastHeartbeatAt DateTime     @default(now()) @map("last_heartbeat_at")
+  stoppedAt       DateTime?    @map("stopped_at")
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  claimedJobs     Job[]
+  jobAttempts     JobAttempt[]
+
+  @@index([status, lastHeartbeatAt])
+  @@map("workers")
+}
+
+model JobAttempt {
+  id            String            @id @default(uuid()) @db.Uuid
+  jobId         String            @map("job_id") @db.Uuid
+  workerId      String?           @map("worker_id") @db.Uuid
+  attemptNumber Int               @map("attempt_number")
+  status        JobAttemptStatus  @default(STARTED)
+  startedAt     DateTime          @default(now()) @map("started_at")
+  finishedAt    DateTime?         @map("finished_at")
+  durationMs    Int?              @map("duration_ms")
+  errorCategory JobErrorCategory? @map("error_category")
+  errorCode     String?           @map("error_code")
+  errorMessage  String?           @map("error_message")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  job           Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  worker        Worker?           @relation(fields: [workerId], references: [id], onDelete: SetNull)
+
+  @@unique([jobId, attemptNumber])
+  @@index([jobId])
+  @@index([workerId])
+  @@map("job_attempts")
+}
+
+model Approval {
+  id                String         @id @default(uuid()) @db.Uuid
+  organizationId    String         @map("organization_id") @db.Uuid
+  recoveryCaseId    String         @map("recovery_case_id") @db.Uuid
+  workflowId        String?        @map("workflow_id") @db.Uuid
+  workflowStepId    String?        @map("workflow_step_id") @db.Uuid
+  requestedByUserId String?        @map("requested_by_user_id") @db.Uuid
+  decidedByUserId   String?        @map("decided_by_user_id") @db.Uuid
+  status            ApprovalStatus @default(PENDING)
+  reason            String?
+  requestedAt       DateTime       @default(now()) @map("requested_at")
+  decidedAt         DateTime?      @map("decided_at")
+  expiresAt         DateTime?      @map("expires_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recoveryCase      RecoveryCase   @relation(fields: [recoveryCaseId], references: [id], onDelete: Cascade)
+  workflow          Workflow?      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowStep      WorkflowStep?  @relation(fields: [workflowStepId], references: [id], onDelete: Cascade)
+  requestedByUser   User?          @relation("RequestedApprovals", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  decidedByUser     User?          @relation("DecidedApprovals", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([recoveryCaseId])
+  @@index([workflowId])
+  @@map("approvals")
+}
+
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  actorUserId    String?      @map("actor_user_id") @db.Uuid
+  entityType     String       @map("entity_type")
+  entityId       String       @map("entity_id")
+  action         String
+  metadata       Json?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorUser      User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@map("audit_logs")
 }

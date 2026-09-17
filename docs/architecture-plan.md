@@ -1,14 +1,14 @@
 # Reloop Architecture Plan
 
-> **Note**: This document defines the planned technical architecture for Reloop. It is a technical specification for upcoming implementation phases. No application source code, database migrations, or container instances are created during Day 1.
+> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, and the durable PostgreSQL core reliability data model (Integrations, ExternalOrders, ExternalReferences, IntegrationEvents, RecoveryCases, Workflows, WorkflowSteps, Jobs, JobAttempts, Workers, Approvals, AuditLogs) are fully implemented and migrated. Upcoming phases will implement Redis Streams coordination and execution engines.
 
 ---
 
 ## 1. Architectural Philosophy & Core Tenets
 
 1. **Durable Source of Truth**:
-   - **PostgreSQL will be the durable source of truth.**
-   - All business entities (Organizations, Users, Integrations, Orders, Exceptions, Recoveries, Audit Logs) are durably persisted in PostgreSQL via Prisma ORM.
+   - **PostgreSQL is the durable source of truth.**
+   - All business entities (Organizations, Users, Integrations, ExternalOrders, ExternalReferences, IntegrationEvents, RecoveryCases, Workflows, WorkflowSteps, Jobs, JobAttempts, Approvals, AuditLogs) are durably persisted in PostgreSQL via Prisma ORM.
 2. **Coordination vs. Persistence**:
    - **Redis will be coordination infrastructure, not the authoritative business database.**
    - Redis manages ephemeral distributed locks, pub/sub communication, rate-limit counters, caching, and stream-based task dispatching. Loss of Redis cache never corrupts business state.
