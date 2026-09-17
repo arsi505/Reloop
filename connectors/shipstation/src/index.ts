@@ -1,0 +1,1 @@
+export const SHIPSTATION_CONNECTOR_VERSION = '0.1.0';

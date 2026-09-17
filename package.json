@@ -1,0 +1,25 @@
+{
+    "name":  "reloop",
+    "version":  "0.1.0",
+    "private":  true,
+    "workspaces":  [
+                       "apps/*",
+                       "packages/*",
+                       "connectors/*"
+                   ],
+    "scripts":  {
+                    "build":  "npm run build --workspace=@reloop/contracts \u0026\u0026 npm run build --workspace=@reloop/database \u0026\u0026 npm run build --workspaces --if-present",
+                    "lint":  "npm run lint --workspaces --if-present",
+                    "test":  "npm run test --workspaces --if-present",
+                    "typecheck":  "npm run typecheck --workspaces --if-present",
+                    "db:validate":  "npm run db:validate --workspace=@reloop/database",
+                    "db:generate":  "npm run db:generate --workspace=@reloop/database"
+                },
+    "devDependencies":  {
+                            "@typescript-eslint/eslint-plugin":  "^7.18.0",
+                            "@typescript-eslint/parser":  "^7.18.0",
+                            "dotenv-cli":  "^11.0.0",
+                            "eslint":  "^8.57.0",
+                            "typescript":  "^5.7.3"
+                        }
+}

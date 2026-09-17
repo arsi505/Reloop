@@ -1,0 +1,20 @@
+{
+  "name": "@reloop/database",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "db:validate": "dotenv -e ../../.env -e ../../.env.example -- prisma validate",
+    "db:generate": "dotenv -e ../../.env -e ../../.env.example -- prisma generate",
+    "build": "npm run db:generate && tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.4.1",
+    "typescript": "^5.7.3"
+  }
+}

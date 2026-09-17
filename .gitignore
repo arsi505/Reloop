@@ -46,6 +46,7 @@ pnpm-debug.log*
 Thumbs.db
 
 # Temporary and Cache files
+*.tsbuildinfo
 .turbo/
 .cache/
 .temp/
