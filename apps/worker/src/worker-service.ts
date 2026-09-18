@@ -8,6 +8,7 @@ import { LeaseManager } from './lease-manager';
 import { WorkerHeartbeat } from './heartbeat';
 import { RetryPolicy } from './retry-policy';
 import { classifyJobError } from './errors';
+import { StaleMessageRecoveryService } from './stale-message-recovery';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,11 +24,13 @@ export class WorkerService {
   private claimService!: JobClaimService;
   private leaseManager!: LeaseManager;
   private heartbeat!: WorkerHeartbeat;
+  private recoveryService!: StaleMessageRecoveryService;
 
   private isRunning: boolean = false;
   private isDraining: boolean = false;
   private activeJobs = new Set<string>();
   private inFlightCount: number = 0;
+  private recoveryInFlightCount: number = 0;
   private loopPromise: Promise<void> | null = null;
 
   constructor(
@@ -96,6 +99,40 @@ export class WorkerService {
     );
     this.heartbeat.start();
 
+    // 5. Initialize and start stale PEL recovery service
+    this.recoveryService = new StaleMessageRecoveryService({
+      config: this.config,
+      prisma: this.prisma,
+      commandRedis: this.commandRedis,
+      claimService: this.claimService,
+      getWorkerDbId: () => this.workerDbId,
+      getAvailableConcurrencySlots: () =>
+        this.config.workerConcurrency -
+        (this.activeJobs.size + this.inFlightCount + this.recoveryInFlightCount),
+      reserveSlot: () => {
+        if (!this.isRunning || this.isDraining) return false;
+        const available =
+          this.config.workerConcurrency -
+          (this.activeJobs.size + this.inFlightCount + this.recoveryInFlightCount);
+        if (available <= 0) return false;
+        this.recoveryInFlightCount++;
+        return true;
+      },
+      releaseSlot: () => {
+        if (this.recoveryInFlightCount > 0) {
+          this.recoveryInFlightCount--;
+        }
+      },
+      isDraining: () => this.isDraining,
+      onExecuteClaimedJob: async (job, attemptId, attemptNumber, msgId) => {
+        await this.executeClaimedJob(job, attemptId, attemptNumber, msgId, true /* fromRecovery */);
+      },
+      onExecuteQueuedJob: async (msgId, fields) => {
+        await this.processStreamEntry(msgId, fields);
+      },
+    });
+    this.recoveryService.start();
+
     this.isRunning = true;
     this.isDraining = false;
 
@@ -103,7 +140,7 @@ export class WorkerService {
       `[Reloop Worker] Started worker: key=${this.config.workerKey}, consumer=${this.config.workerConsumerName}, concurrency=${this.config.workerConcurrency}, lease=${this.config.jobLeaseDurationMs}ms`,
     );
 
-    // 5. Start main consumer loop
+    // 6. Start main consumer loop
     this.loopPromise = this.consumerLoop();
   }
 
@@ -164,7 +201,9 @@ export class WorkerService {
   private async consumerLoop(): Promise<void> {
     while (this.isRunning && !this.isDraining) {
       try {
-        const availableSlots = this.config.workerConcurrency - (this.activeJobs.size + this.inFlightCount);
+        const availableSlots =
+          this.config.workerConcurrency -
+          (this.activeJobs.size + this.inFlightCount + this.recoveryInFlightCount);
         if (availableSlots <= 0) {
           await new Promise((resolve) => setTimeout(resolve, 20));
           continue;
@@ -281,146 +320,182 @@ export class WorkerService {
         this.config.jobLeaseDurationMs,
       );
 
-      if (!claim.claimed || !claim.job || !claim.attemptId) {
+      if (!claim.claimed || !claim.job || !claim.attemptId || claim.attemptNumber === undefined) {
         // Another worker won the claim or job became unclaimable
         releaseInFlight();
         await this.commandRedis.xack(this.config.jobStreamKey, this.config.jobConsumerGroup, msgId);
         return;
       }
 
-      // 4. Claim won: Track active job
-      this.activeJobs.add(jobId);
+      // 4. Claim won: release inFlight tracking and execute claimed job
       releaseInFlight();
-      await this.heartbeat.syncStatusOnActivityChange();
-
-      // Start lease renewal (supports CLAIMED or RUNNING)
-      this.leaseManager.startRenewal(jobId);
-
-      // Perform conditional transition CLAIMED -> RUNNING immediately before handler execution
-      const movedToRunning = await this.claimService.transitionToRunning(jobId, this.workerDbId);
-      if (!movedToRunning) {
-        console.warn(`[Reloop Worker] Failed transition to RUNNING for job ${jobId}. Ownership lost.`);
-        this.leaseManager.stopRenewal(jobId);
-        await this.commandRedis.xack(this.config.jobStreamKey, this.config.jobConsumerGroup, msgId);
-        return;
-      }
-
-      const startTime = Date.now();
-      try {
-        // Execute handler
-        await this.executorRegistry.execute(claim.job.type, {
-          jobId,
-          attemptNumber: claim.attemptNumber!,
-          type: claim.job.type,
-          payload: claim.job.payload,
-          workerId: this.workerDbId,
-          organizationId: claim.job.organizationId,
-        });
-
-        const durationMs = Date.now() - startTime;
-
-        if (this.leaseManager.hasLostOwnership(jobId)) {
-          console.warn(
-            `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Succeeded update skipped.`,
-          );
-          this.leaseManager.stopRenewal(jobId);
-        } else {
-          // Durable success transaction while lease renewal remains active
-          let marked = false;
-          try {
-            marked = await this.claimService.markJobSucceeded(
-              jobId,
-              claim.attemptId,
-              this.workerDbId,
-              durationMs,
-            );
-          } finally {
-            this.leaseManager.stopRenewal(jobId);
-          }
-
-          if (!marked) {
-            console.warn(
-              `[Reloop Worker] Worker ${this.workerDbId} lost lease or ownership before marking job ${jobId} SUCCEEDED. Skipping XACK.`,
-            );
-          } else {
-            // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
-            await this.commandRedis.xack(
-              this.config.jobStreamKey,
-              this.config.jobConsumerGroup,
-              msgId,
-            );
-          }
-        }
-      } catch (err: unknown) {
-        const durationMs = Date.now() - startTime;
-
-        if (this.leaseManager.hasLostOwnership(jobId)) {
-          console.warn(
-            `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Failure update skipped.`,
-          );
-          this.leaseManager.stopRenewal(jobId);
-        } else {
-          const classified = classifyJobError(err);
-          const attemptNumber = claim.attemptNumber!;
-          const maxAttempts = claim.job.maxAttempts;
-
-          let marked = false;
-          try {
-            if (this.retryPolicy.shouldRetry(classified, attemptNumber, maxAttempts)) {
-              // Branch 1: Retryable error and attempts remain -> RETRY_WAITING
-              const nextRunAt = this.retryPolicy.calculateNextRunAt(attemptNumber, classified.retryAfterMs);
-              marked = await this.claimService.markJobRetryWaiting(
-                jobId,
-                claim.attemptId,
-                this.workerDbId,
-                durationMs,
-                classified,
-                nextRunAt,
-              );
-            } else if (classified.retryable && attemptNumber >= maxAttempts) {
-              // Branch 2: Retryable error but attempts exhausted -> DEAD_LETTERED
-              marked = await this.claimService.markJobDeadLettered(
-                jobId,
-                claim.attemptId,
-                this.workerDbId,
-                durationMs,
-                classified,
-              );
-            } else {
-              // Branch 3: Non-retryable / Permanent failure -> FAILED
-              marked = await this.claimService.markJobFailed(
-                jobId,
-                claim.attemptId,
-                this.workerDbId,
-                durationMs,
-                classified,
-              );
-            }
-          } finally {
-            // Stop lease renewal ONLY after durable finalization transaction completes
-            this.leaseManager.stopRenewal(jobId);
-          }
-
-          if (!marked) {
-            console.warn(
-              `[Reloop Worker] Worker ${this.workerDbId} lost lease before marking failure for job ${jobId}. Skipping XACK.`,
-            );
-          } else {
-            // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
-            await this.commandRedis.xack(
-              this.config.jobStreamKey,
-              this.config.jobConsumerGroup,
-              msgId,
-            );
-          }
-        }
-      } finally {
-        this.activeJobs.delete(jobId);
-        await this.heartbeat.syncStatusOnActivityChange();
-      }
+      await this.executeClaimedJob(claim.job, claim.attemptId, claim.attemptNumber, msgId);
     } catch (unexpectedErr) {
       releaseInFlight();
       throw unexpectedErr;
+    }
+  }
+
+  /**
+   * Executes a claimed job through the full execution pipeline:
+   * 1. Adds to activeJobs and updates worker status
+   * 2. Starts lease renewal timer
+   * 3. Transitions CLAIMED -> RUNNING in PostgreSQL immediately before handler start
+   * 4. Runs handler via JobExecutorRegistry
+   * 5. On success: marks job and attempt SUCCEEDED in PostgreSQL, then XACKs Redis message
+   * 6. On failure: classifies error, evaluates retry policy:
+   *    - RETRY_WAITING (if retryable and attempts remain)
+   *    - DEAD_LETTERED (if retryable and attempts exhausted)
+   *    - FAILED (if non-retryable)
+   *    All finalization transactions are lease-fenced. Redis message is XACKed post-commit.
+   * 7. Finally: stops lease renewal, removes from activeJobs, syncs heartbeat
+   */
+  async executeClaimedJob(
+    job: {
+      id: string;
+      organizationId: string;
+      type: string;
+      payload: unknown;
+      attemptCount: number;
+      maxAttempts: number;
+    },
+    attemptId: string,
+    attemptNumber: number,
+    msgId: string,
+    fromRecovery: boolean = false,
+  ): Promise<void> {
+    const jobId = job.id;
+    this.activeJobs.add(jobId);
+    if (fromRecovery && this.recoveryInFlightCount > 0) {
+      this.recoveryInFlightCount--;
+    }
+    await this.heartbeat.syncStatusOnActivityChange();
+
+    // Start lease renewal (supports CLAIMED or RUNNING)
+    this.leaseManager.startRenewal(jobId);
+
+    // Perform conditional transition CLAIMED -> RUNNING immediately before handler execution
+    const movedToRunning = await this.claimService.transitionToRunning(jobId, this.workerDbId);
+    if (!movedToRunning) {
+      console.warn(`[Reloop Worker] Failed transition to RUNNING for job ${jobId}. Ownership lost.`);
+      this.leaseManager.stopRenewal(jobId);
+      this.activeJobs.delete(jobId);
+      await this.heartbeat.syncStatusOnActivityChange();
+      await this.commandRedis.xack(this.config.jobStreamKey, this.config.jobConsumerGroup, msgId);
+      return;
+    }
+
+    const startTime = Date.now();
+    try {
+      // Execute handler
+      await this.executorRegistry.execute(job.type, {
+        jobId,
+        attemptNumber,
+        type: job.type,
+        payload: job.payload,
+        workerId: this.workerDbId,
+        organizationId: job.organizationId,
+      });
+
+      const durationMs = Date.now() - startTime;
+
+      if (this.leaseManager.hasLostOwnership(jobId)) {
+        console.warn(
+          `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Succeeded update skipped.`,
+        );
+        this.leaseManager.stopRenewal(jobId);
+      } else {
+        // Durable success transaction while lease renewal remains active
+        let marked = false;
+        try {
+          marked = await this.claimService.markJobSucceeded(
+            jobId,
+            attemptId,
+            this.workerDbId,
+            durationMs,
+          );
+        } finally {
+          this.leaseManager.stopRenewal(jobId);
+        }
+
+        if (!marked) {
+          console.warn(
+            `[Reloop Worker] Worker ${this.workerDbId} lost lease or ownership before marking job ${jobId} SUCCEEDED. Skipping XACK.`,
+          );
+        } else {
+          // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
+          await this.commandRedis.xack(
+            this.config.jobStreamKey,
+            this.config.jobConsumerGroup,
+            msgId,
+          );
+        }
+      }
+    } catch (err: unknown) {
+      const durationMs = Date.now() - startTime;
+
+      if (this.leaseManager.hasLostOwnership(jobId)) {
+        console.warn(
+          `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Failure update skipped.`,
+        );
+        this.leaseManager.stopRenewal(jobId);
+      } else {
+        const classified = classifyJobError(err);
+        const maxAttempts = job.maxAttempts;
+
+        let marked = false;
+        try {
+          if (this.retryPolicy.shouldRetry(classified, attemptNumber, maxAttempts)) {
+            // Branch 1: Retryable error and attempts remain -> RETRY_WAITING
+            const nextRunAt = this.retryPolicy.calculateNextRunAt(attemptNumber, classified.retryAfterMs);
+            marked = await this.claimService.markJobRetryWaiting(
+              jobId,
+              attemptId,
+              this.workerDbId,
+              durationMs,
+              classified,
+              nextRunAt,
+            );
+          } else if (classified.retryable && attemptNumber >= maxAttempts) {
+            // Branch 2: Retryable error but attempts exhausted -> DEAD_LETTERED
+            marked = await this.claimService.markJobDeadLettered(
+              jobId,
+              attemptId,
+              this.workerDbId,
+              durationMs,
+              classified,
+            );
+          } else {
+            // Branch 3: Non-retryable / Permanent failure -> FAILED
+            marked = await this.claimService.markJobFailed(
+              jobId,
+              attemptId,
+              this.workerDbId,
+              durationMs,
+              classified,
+            );
+          }
+        } finally {
+          // Stop lease renewal ONLY after durable finalization transaction completes
+          this.leaseManager.stopRenewal(jobId);
+        }
+
+        if (!marked) {
+          console.warn(
+            `[Reloop Worker] Worker ${this.workerDbId} lost lease before marking failure for job ${jobId}. Skipping XACK.`,
+          );
+        } else {
+          // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
+          await this.commandRedis.xack(
+            this.config.jobStreamKey,
+            this.config.jobConsumerGroup,
+            msgId,
+          );
+        }
+      }
+    } finally {
+      this.activeJobs.delete(jobId);
+      await this.heartbeat.syncStatusOnActivityChange();
     }
   }
 
@@ -430,6 +505,11 @@ export class WorkerService {
     console.log(`[Reloop Worker] Initiating graceful shutdown for worker ${this.config.workerKey}...`);
     this.isDraining = true;
     this.isRunning = false;
+
+    // 0. Stop recovery scanner immediately
+    if (this.recoveryService) {
+      this.recoveryService.stop();
+    }
 
     // 1. Mark worker as DRAINING in PostgreSQL
     if (this.workerDbId) {
@@ -507,6 +587,14 @@ export class WorkerService {
     return this.activeJobs.size;
   }
 
+  getInFlightCount(): number {
+    return this.inFlightCount;
+  }
+
+  getRecoveryInFlightCount(): number {
+    return this.recoveryInFlightCount;
+  }
+
   getIsRunning(): boolean {
     return this.isRunning;
   }
@@ -517,5 +605,9 @@ export class WorkerService {
 
   getExecutorRegistry(): JobExecutorRegistry {
     return this.executorRegistry;
+  }
+
+  getRecoveryService(): StaleMessageRecoveryService {
+    return this.recoveryService;
   }
 }

@@ -18,6 +18,9 @@ export interface WorkerConfig {
   blockTimeoutMs: number;
   jobRetryDelaysMs: number[];
   jobRetryJitterPercent: number;
+  workerRecoveryScanIntervalMs: number;
+  workerPelMinIdleMs: number;
+  workerRecoveryBatchSize: number;
 }
 
 export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
@@ -69,6 +72,15 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
   const rawJitter = overrides.jobRetryJitterPercent ?? (process.env.JOB_RETRY_JITTER_PERCENT ? parseInt(process.env.JOB_RETRY_JITTER_PERCENT, 10) : 15);
   const jobRetryJitterPercent = Number.isFinite(rawJitter) ? rawJitter : 15;
 
+  const rawRecoveryScan = overrides.workerRecoveryScanIntervalMs ?? (process.env.WORKER_RECOVERY_SCAN_INTERVAL_MS ? parseInt(process.env.WORKER_RECOVERY_SCAN_INTERVAL_MS, 10) : 5000);
+  const workerRecoveryScanIntervalMs = Number.isFinite(rawRecoveryScan) ? rawRecoveryScan : 5000;
+
+  const rawPelMinIdle = overrides.workerPelMinIdleMs ?? (process.env.WORKER_PEL_MIN_IDLE_MS ? parseInt(process.env.WORKER_PEL_MIN_IDLE_MS, 10) : 20000);
+  const workerPelMinIdleMs = Number.isFinite(rawPelMinIdle) ? rawPelMinIdle : 20000;
+
+  const rawRecoveryBatch = overrides.workerRecoveryBatchSize ?? (process.env.WORKER_RECOVERY_BATCH_SIZE ? parseInt(process.env.WORKER_RECOVERY_BATCH_SIZE, 10) : 20);
+  const workerRecoveryBatchSize = Number.isFinite(rawRecoveryBatch) ? rawRecoveryBatch : 20;
+
   // Validation
   if (workerConcurrency <= 0) {
     throw new Error('Invalid configuration: workerConcurrency must be greater than 0');
@@ -104,6 +116,15 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
   if (jobRetryJitterPercent < 0 || jobRetryJitterPercent > 100) {
     throw new Error('Invalid configuration: jobRetryJitterPercent must be between 0 and 100');
   }
+  if (workerRecoveryScanIntervalMs <= 0) {
+    throw new Error('Invalid configuration: workerRecoveryScanIntervalMs must be greater than 0');
+  }
+  if (workerPelMinIdleMs <= 0) {
+    throw new Error('Invalid configuration: workerPelMinIdleMs must be greater than 0');
+  }
+  if (workerRecoveryBatchSize <= 0) {
+    throw new Error('Invalid configuration: workerRecoveryBatchSize must be greater than 0');
+  }
 
   return {
     redisUrl,
@@ -120,5 +141,8 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
     blockTimeoutMs,
     jobRetryDelaysMs,
     jobRetryJitterPercent,
+    workerRecoveryScanIntervalMs,
+    workerPelMinIdleMs,
+    workerRecoveryBatchSize,
   };
 }

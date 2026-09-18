@@ -10,6 +10,7 @@ export * from './inspect';
 export * from './job-claim';
 export * from './lease-manager';
 export * from './retry-policy';
+export * from './stale-message-recovery';
 export * from './worker-service';
 
 async function bootstrap() {

@@ -1,6 +1,6 @@
 # Reloop Architecture Plan
 
-> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, the Redis Streams job dispatch scheduler, and the distributed worker engine (canonical CLAIMED -> RUNNING lifecycle, atomic claims, lease management, and execution tracing) are fully implemented and verified. Upcoming Day 8 will implement retry classification, exponential backoff, jitter, and RETRY_WAITING pacing. Stale PEL recovery and expired lease crash recovery remain a separate later reliability step.
+> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, the Redis Streams job dispatch scheduler, the distributed worker engine (canonical CLAIMED -> RUNNING lifecycle, atomic claims, lease management, and execution tracing), retry classification/backoff/dead-lettering, and worker crash recovery via Redis XAUTOCLAIM and PostgreSQL lease fencing are fully implemented and verified.
 
 ---
 
@@ -133,3 +133,16 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Classification & Exponential Backoff**: Failures are classified into `JobErrorCategory` types. Transient and rate-limited failures receive exponential backoff (`[30s, 2m, 10m, 30m]`) with $\pm 15\%$ uniform jitter and provider `Retry-After` precedence.
 - **Dead-Letter Discipline**: When `attemptCount >= maxAttempts`, jobs transition to `DEAD_LETTERED` in PostgreSQL and Redis messages are acknowledged (`XACK`), preventing infinite reprocessing. Non-retryable permanent errors transition immediately to `FAILED`.
 - **Fenced Transactions**: All failure state transitions enforce active worker ownership and unexpired lease fences, rolling back completely if ownership was lost.
+
+---
+
+## 7. Distributed Worker Crash & Stale PEL Recovery
+
+- **Redis `XAUTOCLAIM` Engine**: Stale messages remaining in the consumer group Pending Entries List (PEL) past `WORKER_PEL_MIN_IDLE_MS` are discovered using Redis 7 `XAUTOCLAIM`.
+- **PostgreSQL Authoritative Fencing**: Redis PEL membership conveys zero execution authority. The recovering worker rereads PostgreSQL status with row-level locks (`SELECT ... FOR UPDATE`).
+- **Safe vs. Ambiguous Crash Boundary**:
+  - **Expired `CLAIMED`**: Handler never began; previous attempt marked `ABANDONED` (`WORKER_LEASE_EXPIRED_BEFORE_EXECUTION`), claim transferred to recovering worker with new `STARTED` attempt, executed through pipeline to completion (or `DEAD_LETTERED` if attempts exhausted).
+  - **Expired `RUNNING`**: Ambiguous crash boundary; previous attempt marked `ABANDONED` (`AMBIGUOUS_WORKER_CRASH`), job transitioned to `BLOCKED` (`completedAt = NULL`), zero re-execution, message XACKed to clean PEL.
+  - **Active Leases**: Left untouched.
+  - **Terminal / RETRY_WAITING**: Obsolete PEL signals are XACKed without execution.
+  - **Transaction Ordering**: PostgreSQL commit is executed before Redis `XACK`. See [crash-recovery.md](./crash-recovery.md).

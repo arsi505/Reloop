@@ -17,6 +17,22 @@ export interface ClaimResult {
   attemptNumber?: number;
 }
 
+export interface RecoverClaimedResult {
+  recovered: boolean;
+  execute: boolean;
+  deadLettered?: boolean;
+  job?: {
+    id: string;
+    organizationId: string;
+    type: string;
+    payload: unknown;
+    attemptCount: number;
+    maxAttempts: number;
+  };
+  attemptId?: string;
+  attemptNumber?: number;
+}
+
 export class JobClaimService {
   private prisma: PrismaClient;
 
@@ -382,6 +398,237 @@ export class JobClaimService {
         if (attemptUpdated === 0) {
           throw new Error(`JobAttempt ${attemptId} not found`);
         }
+
+        return true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Recovers a job stuck in CLAIMED whose lease has expired.
+   * Atomic, row-locked transaction:
+   * - If attempts remain (attemptCount < maxAttempts):
+   *     Marks previous attempt as ABANDONED (WORKER_LEASE_EXPIRED_BEFORE_EXECUTION)
+   *     Transfers claim to recovering worker with new lease and incremented attemptCount
+   *     Creates new JobAttempt in STARTED status
+   *     Returns { recovered: true, execute: true, job, attemptId, attemptNumber }
+   * - If maxAttempts exhausted:
+   *     Marks previous attempt as ABANDONED
+   *     Transitions Job to DEAD_LETTERED with completedAt = NOW()
+   *     Returns { recovered: true, execute: false, deadLettered: true }
+   * - If 0 rows match (lease valid or another worker won):
+   *     Returns { recovered: false, execute: false }
+   */
+  async recoverExpiredClaimedJob(
+    jobId: string,
+    workerDbId: string,
+    leaseDurationMs: number,
+  ): Promise<RecoverClaimedResult> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Lock and inspect eligible expired CLAIMED job
+        const lockedRows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            organizationId: string;
+            type: string;
+            payload: unknown;
+            attemptCount: number;
+            maxAttempts: number;
+          }>
+        >`
+          SELECT
+            id,
+            organization_id as "organizationId",
+            type,
+            payload,
+            attempt_count as "attemptCount",
+            max_attempts as "maxAttempts"
+          FROM jobs
+          WHERE
+            id = ${jobId}::uuid
+            AND status = 'CLAIMED'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at <= NOW()
+          FOR UPDATE
+        `;
+
+        if (!lockedRows || lockedRows.length === 0) {
+          return { recovered: false, execute: false };
+        }
+
+        const currentJob = lockedRows[0];
+        const previousAttemptNumber = currentJob.attemptCount;
+
+        // 2. Mark previous attempt as ABANDONED
+        await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'ABANDONED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = GREATEST(0, (EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::int),
+            error_category = 'UNKNOWN'::"JobErrorCategory",
+            error_code = 'WORKER_LEASE_EXPIRED_BEFORE_EXECUTION',
+            error_message = 'Worker lease expired before handler execution began'
+          WHERE
+            job_id = ${jobId}::uuid
+            AND attempt_number = ${previousAttemptNumber}
+            AND status = 'STARTED'::"JobAttemptStatus"
+        `;
+
+        // 3. Check if attempts remain
+        if (currentJob.attemptCount < currentJob.maxAttempts) {
+          const newAttemptCount = currentJob.attemptCount + 1;
+
+          const updatedRows = await tx.$queryRaw<
+            Array<{
+              id: string;
+              organizationId: string;
+              type: string;
+              payload: unknown;
+              attemptCount: number;
+              maxAttempts: number;
+            }>
+          >`
+            UPDATE jobs
+            SET
+              status = 'CLAIMED'::"JobStatus",
+              claimed_by_worker_id = ${workerDbId}::uuid,
+              lease_expires_at = NOW() + (${leaseDurationMs.toString()} || ' milliseconds')::interval,
+              attempt_count = ${newAttemptCount},
+              next_run_at = NULL,
+              completed_at = NULL,
+              updated_at = NOW()
+            WHERE
+              id = ${jobId}::uuid
+            RETURNING
+              id,
+              organization_id as "organizationId",
+              type,
+              payload,
+              attempt_count as "attemptCount",
+              max_attempts as "maxAttempts"
+          `;
+
+          const attemptRows = await tx.$queryRaw<Array<{ id: string }>>`
+            INSERT INTO job_attempts (
+              id,
+              job_id,
+              worker_id,
+              attempt_number,
+              status,
+              started_at,
+              created_at
+            )
+            VALUES (
+              gen_random_uuid(),
+              ${jobId}::uuid,
+              ${workerDbId}::uuid,
+              ${newAttemptCount},
+              'STARTED'::"JobAttemptStatus",
+              NOW(),
+              NOW()
+            )
+            RETURNING id
+          `;
+
+          return {
+            recovered: true,
+            execute: true,
+            job: updatedRows[0],
+            attemptId: attemptRows[0].id,
+            attemptNumber: newAttemptCount,
+          };
+        } else {
+          // Max attempts exhausted: transition to DEAD_LETTERED
+          await tx.$executeRaw`
+            UPDATE jobs
+            SET
+              status = 'DEAD_LETTERED'::"JobStatus",
+              claimed_by_worker_id = NULL,
+              lease_expires_at = NULL,
+              next_run_at = NULL,
+              completed_at = NOW(),
+              updated_at = NOW()
+            WHERE
+              id = ${jobId}::uuid
+          `;
+
+          return {
+            recovered: true,
+            execute: false,
+            deadLettered: true,
+          };
+        }
+      });
+    } catch {
+      return { recovered: false, execute: false };
+    }
+  }
+
+  /**
+   * Recovers a job stuck in RUNNING whose lease has expired.
+   * Because execution began, the outcome is ambiguous (e.g. external mutation may have succeeded).
+   * It is NEVER blindly re-executed.
+   *
+   * In a single row-locked transaction:
+   * - Marks current attempt as ABANDONED with error code AMBIGUOUS_WORKER_CRASH
+   * - Transitions Job to BLOCKED with completedAt = NULL
+   * - Returns true if recovered, false if race lost or lease valid
+   */
+  async recoverExpiredRunningJob(jobId: string): Promise<boolean> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const lockedRows = await tx.$queryRaw<Array<{ id: string; attemptCount: number }>>`
+          SELECT
+            id,
+            attempt_count as "attemptCount"
+          FROM jobs
+          WHERE
+            id = ${jobId}::uuid
+            AND status = 'RUNNING'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at <= NOW()
+          FOR UPDATE
+        `;
+
+        if (!lockedRows || lockedRows.length === 0) {
+          return false;
+        }
+
+        const job = lockedRows[0];
+
+        // 1. Mark current attempt as ABANDONED
+        await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'ABANDONED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = GREATEST(0, (EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::int),
+            error_category = 'UNKNOWN'::"JobErrorCategory",
+            error_code = 'AMBIGUOUS_WORKER_CRASH',
+            error_message = 'Worker crashed while executing job handler; ambiguous state requires external verification'
+          WHERE
+            job_id = ${jobId}::uuid
+            AND attempt_number = ${job.attemptCount}
+            AND status = 'STARTED'::"JobAttemptStatus"
+        `;
+
+        // 2. Transition Job to BLOCKED (completedAt stays null)
+        await tx.$executeRaw`
+          UPDATE jobs
+          SET
+            status = 'BLOCKED'::"JobStatus",
+            claimed_by_worker_id = NULL,
+            lease_expires_at = NULL,
+            next_run_at = NULL,
+            completed_at = NULL,
+            updated_at = NOW()
+          WHERE
+            id = ${jobId}::uuid
+        `;
 
         return true;
       });
