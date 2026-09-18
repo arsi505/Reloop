@@ -1,6 +1,6 @@
 # Reloop Architecture Plan
 
-> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, and the durable PostgreSQL core reliability data model (Integrations, ExternalOrders, ExternalReferences, IntegrationEvents, RecoveryCases, Workflows, WorkflowSteps, Jobs, JobAttempts, Workers, Approvals, AuditLogs) are fully implemented and migrated. Upcoming phases will implement Redis Streams coordination and execution engines.
+> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, and the Redis Streams job dispatch scheduler are fully implemented and verified. Upcoming Day 7 will implement worker job execution and atomic claiming.
 
 ---
 

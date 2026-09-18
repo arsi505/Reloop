@@ -1,45 +1,44 @@
-import * as dotenv from 'dotenv';
-import Redis from 'ioredis';
+import { PrismaClient } from '@prisma/client';
+import { loadSchedulerConfig } from './config';
+import { RedisPublisher } from './redis-publisher';
+import { SchedulerService } from './scheduler-service';
 
-dotenv.config();
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6380';
-const DATABASE_URL = process.env.DATABASE_URL;
+export * from './config';
+export * from './redis-publisher';
+export * from './job-scanner';
+export * from './scheduler-service';
 
 async function bootstrap() {
-  console.log('[Reloop Scheduler] Starting scheduler skeleton service...');
-  console.log(`[Reloop Scheduler] Configuration loaded (Redis: ${REDIS_URL}, Database configured: ${Boolean(DATABASE_URL)})`);
+  const config = loadSchedulerConfig();
+  console.log(`[Reloop Scheduler] Initializing scheduler instance: ${config.instanceId}`);
+  console.log(`[Reloop Scheduler] Configuration: Redis=${config.redisUrl}, Stream=${config.jobStreamKey}, Group=${config.jobConsumerGroup}, Interval=${config.schedulerIntervalMs}ms, Batch=${config.schedulerBatchSize}, MarkerTTL=${config.dispatchMarkerTtlMs}ms`);
 
-  let redis: Redis | null = null;
-  try {
-    redis = new Redis(REDIS_URL, {
-      maxRetriesPerRequest: 1,
-      connectTimeout: 3000,
-      lazyConnect: true,
-    });
-    await redis.connect();
-    const pong = await redis.ping();
-    console.log(`[Reloop Scheduler] Coordination infrastructure reachable (Redis PING -> ${pong})`);
-  } catch (err) {
-    console.warn('[Reloop Scheduler] Warning: Could not reach Redis on initial ping:', (err as Error).message);
-  }
-
-  console.log('[Reloop Scheduler] Service initialized in skeleton mode (no jobs scheduled). Ready.');
+  const prisma = new PrismaClient();
+  const publisher = new RedisPublisher(config);
+  const scheduler = new SchedulerService(config, prisma, publisher);
 
   const shutdown = async (signal: string) => {
-    console.log(`[Reloop Scheduler] Received ${signal}. Shutting down gracefully...`);
-    if (redis) {
-      await redis.quit().catch(() => {});
-    }
-    console.log('[Reloop Scheduler] Shutdown complete.');
+    console.log(`[Reloop Scheduler] Received ${signal}. Initiating graceful shutdown...`);
+    await scheduler.stop();
+    await prisma.$disconnect();
+    console.log('[Reloop Scheduler] Graceful shutdown complete. Exiting.');
     process.exit(0);
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  try {
+    await scheduler.start();
+    console.log('[Reloop Scheduler] Scheduler is running actively.');
+  } catch (err) {
+    console.error('[Reloop Scheduler] Fatal error starting scheduler:', err);
+    await scheduler.stop().catch(() => {});
+    await prisma.$disconnect().catch(() => {});
+    process.exit(1);
+  }
 }
 
-bootstrap().catch((err) => {
-  console.error('[Reloop Scheduler] Fatal error during bootstrap:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  bootstrap();
+}
