@@ -1,4 +1,7 @@
 import { PrismaClient } from '@prisma/client';
+import { JobExecutionError, classifyJobError, sanitizeErrorMessage } from './errors';
+
+export { sanitizeErrorMessage };
 
 export interface ClaimResult {
   claimed: boolean;
@@ -8,22 +11,10 @@ export interface ClaimResult {
     type: string;
     payload: unknown;
     attemptCount: number;
+    maxAttempts: number;
   };
   attemptId?: string;
   attemptNumber?: number;
-}
-
-export function sanitizeErrorMessage(err: unknown): string {
-  if (!err) return 'Unknown error occurred during job execution';
-  const rawMsg = err instanceof Error ? err.message : String(err);
-
-  // Redact secrets, passwords, connection strings, auth headers
-  return rawMsg
-    .replace(/(password|passwd|secret|token|bearer|key)=([^\s&]+)/gi, '$1=[REDACTED]')
-    .replace(/Bearer\s+[a-zA-Z0-9._-]+/gi, 'Bearer [REDACTED]')
-    .replace(/postgresql:\/\/[^@]+@/gi, 'postgresql://[REDACTED]@')
-    .replace(/redis:\/\/[^@]+@/gi, 'redis://[REDACTED]@')
-    .slice(0, 500);
 }
 
 export class JobClaimService {
@@ -54,6 +45,7 @@ export class JobClaimService {
           type: string;
           payload: unknown;
           attemptCount: number;
+          maxAttempts: number;
         }>
       >`
         UPDATE jobs
@@ -72,7 +64,8 @@ export class JobClaimService {
           organization_id as "organizationId",
           type,
           payload,
-          attempt_count as "attemptCount"
+          attempt_count as "attemptCount",
+          max_attempts as "maxAttempts"
       `;
 
       if (!claimedRows || claimedRows.length === 0) {
@@ -169,45 +162,176 @@ export class JobClaimService {
     workerDbId: string,
     durationMs: number,
   ): Promise<boolean> {
-    return await this.prisma.$transaction(async (tx) => {
-      const jobUpdated = await tx.$executeRaw`
-        UPDATE jobs
-        SET
-          status = 'SUCCEEDED'::"JobStatus",
-          completed_at = NOW(),
-          lease_expires_at = NULL,
-          claimed_by_worker_id = NULL,
-          updated_at = NOW()
-        WHERE
-          id = ${jobId}::uuid
-          AND claimed_by_worker_id = ${workerDbId}::uuid
-          AND status = 'RUNNING'::"JobStatus"
-          AND lease_expires_at IS NOT NULL
-          AND lease_expires_at > NOW()
-      `;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const jobUpdated = await tx.$executeRaw`
+          UPDATE jobs
+          SET
+            status = 'SUCCEEDED'::"JobStatus",
+            completed_at = NOW(),
+            lease_expires_at = NULL,
+            claimed_by_worker_id = NULL,
+            updated_at = NOW()
+          WHERE
+            id = ${jobId}::uuid
+            AND claimed_by_worker_id = ${workerDbId}::uuid
+            AND status = 'RUNNING'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at > NOW()
+        `;
 
-      if (jobUpdated === 0) {
-        return false;
-      }
+        if (jobUpdated === 0) {
+          throw new Error(`Ownership fence failed: Job ${jobId} not in RUNNING or lease expired`);
+        }
 
-      await tx.$executeRaw`
-        UPDATE job_attempts
-        SET
-          status = 'SUCCEEDED'::"JobAttemptStatus",
-          finished_at = NOW(),
-          duration_ms = ${durationMs}
-        WHERE
-          id = ${attemptId}::uuid
-      `;
+        const attemptUpdated = await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'SUCCEEDED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = ${durationMs}
+          WHERE
+            id = ${attemptId}::uuid
+        `;
 
-      return true;
-    });
+        if (attemptUpdated === 0) {
+          throw new Error(`JobAttempt ${attemptId} not found`);
+        }
+
+        return true;
+      });
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Marks Job and JobAttempt as FAILED in a single transaction.
-   * Day 7 temporary failure path (no retry engine yet).
-   * Verifies worker ownership and unexpired lease.
+   * Marks Job as RETRY_WAITING and current JobAttempt as FAILED in a single transaction.
+   * Fenced with ownership and active lease check.
+   * If fenced Job update affects 0 rows, throws inside transaction to guarantee complete rollback.
+   */
+  async markJobRetryWaiting(
+    jobId: string,
+    attemptId: string,
+    workerDbId: string,
+    durationMs: number,
+    error: JobExecutionError,
+    nextRunAt: Date,
+  ): Promise<boolean> {
+    const sanitizedMessage = sanitizeErrorMessage(error.message);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const jobUpdated = await tx.$executeRaw`
+          UPDATE jobs
+          SET
+            status = 'RETRY_WAITING'::"JobStatus",
+            next_run_at = ${nextRunAt}::timestamptz,
+            claimed_by_worker_id = NULL,
+            lease_expires_at = NULL,
+            completed_at = NULL,
+            updated_at = NOW()
+          WHERE
+            id = ${jobId}::uuid
+            AND claimed_by_worker_id = ${workerDbId}::uuid
+            AND status = 'RUNNING'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at > NOW()
+        `;
+
+        if (jobUpdated === 0) {
+          throw new Error(`Ownership fence failed: Job ${jobId} not in RUNNING or lease expired`);
+        }
+
+        const attemptUpdated = await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'FAILED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = ${durationMs},
+            error_category = ${error.category}::"JobErrorCategory",
+            error_code = ${error.code},
+            error_message = ${sanitizedMessage}
+          WHERE
+            id = ${attemptId}::uuid
+        `;
+
+        if (attemptUpdated === 0) {
+          throw new Error(`JobAttempt ${attemptId} not found`);
+        }
+
+        return true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Marks Job as DEAD_LETTERED and current JobAttempt as FAILED when max attempts are exhausted.
+   * Fenced with ownership and active lease check.
+   * If fenced Job update affects 0 rows, throws inside transaction to guarantee complete rollback.
+   */
+  async markJobDeadLettered(
+    jobId: string,
+    attemptId: string,
+    workerDbId: string,
+    durationMs: number,
+    error: JobExecutionError,
+  ): Promise<boolean> {
+    const sanitizedMessage = sanitizeErrorMessage(error.message);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const jobUpdated = await tx.$executeRaw`
+          UPDATE jobs
+          SET
+            status = 'DEAD_LETTERED'::"JobStatus",
+            next_run_at = NULL,
+            claimed_by_worker_id = NULL,
+            lease_expires_at = NULL,
+            completed_at = NOW(),
+            updated_at = NOW()
+          WHERE
+            id = ${jobId}::uuid
+            AND claimed_by_worker_id = ${workerDbId}::uuid
+            AND status = 'RUNNING'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at > NOW()
+        `;
+
+        if (jobUpdated === 0) {
+          throw new Error(`Ownership fence failed: Job ${jobId} not in RUNNING or lease expired`);
+        }
+
+        const attemptUpdated = await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'FAILED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = ${durationMs},
+            error_category = ${error.category}::"JobErrorCategory",
+            error_code = ${error.code},
+            error_message = ${sanitizedMessage}
+          WHERE
+            id = ${attemptId}::uuid
+        `;
+
+        if (attemptUpdated === 0) {
+          throw new Error(`JobAttempt ${attemptId} not found`);
+        }
+
+        return true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Marks Job and JobAttempt as FAILED for non-retryable/permanent failure.
+   * Fenced with ownership and active lease check.
+   * If fenced Job update affects 0 rows, throws inside transaction to guarantee complete rollback.
    */
   async markJobFailed(
     jobId: string,
@@ -216,42 +340,53 @@ export class JobClaimService {
     durationMs: number,
     error: unknown,
   ): Promise<boolean> {
-    const sanitizedMessage = sanitizeErrorMessage(error);
+    const classified = error instanceof JobExecutionError ? error : classifyJobError(error);
+    const sanitizedMessage = sanitizeErrorMessage(classified.message);
 
-    return await this.prisma.$transaction(async (tx) => {
-      const jobUpdated = await tx.$executeRaw`
-        UPDATE jobs
-        SET
-          status = 'FAILED'::"JobStatus",
-          lease_expires_at = NULL,
-          claimed_by_worker_id = NULL,
-          updated_at = NOW()
-        WHERE
-          id = ${jobId}::uuid
-          AND claimed_by_worker_id = ${workerDbId}::uuid
-          AND status = 'RUNNING'::"JobStatus"
-          AND lease_expires_at IS NOT NULL
-          AND lease_expires_at > NOW()
-      `;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const jobUpdated = await tx.$executeRaw`
+          UPDATE jobs
+          SET
+            status = 'FAILED'::"JobStatus",
+            next_run_at = NULL,
+            claimed_by_worker_id = NULL,
+            lease_expires_at = NULL,
+            completed_at = NOW(),
+            updated_at = NOW()
+          WHERE
+            id = ${jobId}::uuid
+            AND claimed_by_worker_id = ${workerDbId}::uuid
+            AND status = 'RUNNING'::"JobStatus"
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at > NOW()
+        `;
 
-      if (jobUpdated === 0) {
-        return false;
-      }
+        if (jobUpdated === 0) {
+          throw new Error(`Ownership fence failed: Job ${jobId} not in RUNNING or lease expired`);
+        }
 
-      await tx.$executeRaw`
-        UPDATE job_attempts
-        SET
-          status = 'FAILED'::"JobAttemptStatus",
-          finished_at = NOW(),
-          duration_ms = ${durationMs},
-          error_category = 'UNKNOWN'::"JobErrorCategory",
-          error_code = 'HANDLER_ERROR',
-          error_message = ${sanitizedMessage}
-        WHERE
-          id = ${attemptId}::uuid
-      `;
+        const attemptUpdated = await tx.$executeRaw`
+          UPDATE job_attempts
+          SET
+            status = 'FAILED'::"JobAttemptStatus",
+            finished_at = NOW(),
+            duration_ms = ${durationMs},
+            error_category = ${classified.category}::"JobErrorCategory",
+            error_code = ${classified.code},
+            error_message = ${sanitizedMessage}
+          WHERE
+            id = ${attemptId}::uuid
+        `;
 
-      return true;
-    });
+        if (attemptUpdated === 0) {
+          throw new Error(`JobAttempt ${attemptId} not found`);
+        }
+
+        return true;
+      });
+    } catch {
+      return false;
+    }
   }
 }

@@ -123,3 +123,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Tenant Isolation**: All queries in Prisma are scoped to `organizationId`.
 - **Integration Outage Handling**: When external APIs encounter repeated 5xx errors or timeouts, Reloop marks the connector as `DEGRADED` or `DOWN`, suppresses aggressive retries across the affected connector, applies connector-wide backoff/rate limiting, periodically performs non-mutating background health checks, and resumes queued work gradually after health is restored.
 - **Strict Verification Timeout**: Verification poller attempts verification with exponential intervals up to a maximum duration (e.g., 10 minutes). If state fails to converge within the window, the case transitions to `FAILED` or remains `BLOCKED` with operator notification.
+
+---
+
+## 6. Distributed Job Execution & Retry Engine
+
+- **Job Dispatching**: The scheduler (`apps/scheduler`) scans eligible jobs (`QUEUED` or `RETRY_WAITING` with `next_run_at <= NOW()`) and dispatches minimal notifications (`jobId`) to Redis Streams (`reloop:jobs:ready`).
+- **Atomic Claiming & Leases**: Distributed workers (`apps/worker`) claim jobs atomically via conditional PostgreSQL `UPDATE ... WHERE ... RETURNING` queries, transitioning jobs from `QUEUED` / `RETRY_WAITING` to `CLAIMED` and then `RUNNING` with an active heartbeat lease.
+- **Classification & Exponential Backoff**: Failures are classified into `JobErrorCategory` types. Transient and rate-limited failures receive exponential backoff (`[30s, 2m, 10m, 30m]`) with $\pm 15\%$ uniform jitter and provider `Retry-After` precedence.
+- **Dead-Letter Discipline**: When `attemptCount >= maxAttempts`, jobs transition to `DEAD_LETTERED` in PostgreSQL and Redis messages are acknowledged (`XACK`), preventing infinite reprocessing. Non-retryable permanent errors transition immediately to `FAILED`.
+- **Fenced Transactions**: All failure state transitions enforce active worker ownership and unexpired lease fences, rolling back completely if ownership was lost.

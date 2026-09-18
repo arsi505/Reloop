@@ -3,10 +3,13 @@ import { loadWorkerConfig } from './config';
 import { WorkerService } from './worker-service';
 
 export * from './config';
+export * from './errors';
 export * from './executor';
 export * from './heartbeat';
+export * from './inspect';
 export * from './job-claim';
 export * from './lease-manager';
+export * from './retry-policy';
 export * from './worker-service';
 
 async function bootstrap() {

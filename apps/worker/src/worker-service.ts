@@ -6,6 +6,8 @@ import { JobExecutorRegistry } from './executor';
 import { JobClaimService } from './job-claim';
 import { LeaseManager } from './lease-manager';
 import { WorkerHeartbeat } from './heartbeat';
+import { RetryPolicy } from './retry-policy';
+import { classifyJobError } from './errors';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -15,6 +17,7 @@ export class WorkerService {
   private readRedis: Redis;
   private commandRedis: Redis;
   private executorRegistry: JobExecutorRegistry;
+  private retryPolicy: RetryPolicy;
 
   private workerDbId: string = '';
   private claimService!: JobClaimService;
@@ -34,11 +37,18 @@ export class WorkerService {
       readRedis?: Redis;
       commandRedis?: Redis;
       executorRegistry?: JobExecutorRegistry;
+      retryPolicy?: RetryPolicy;
     } = {},
   ) {
     this.config = config;
     this.prisma = prisma;
     this.executorRegistry = options.executorRegistry ?? new JobExecutorRegistry();
+    this.retryPolicy =
+      options.retryPolicy ??
+      new RetryPolicy({
+        delaysMs: config.jobRetryDelaysMs,
+        jitterPercent: config.jobRetryJitterPercent,
+      });
 
     this.readRedis =
       options.readRedis ??
@@ -308,20 +318,25 @@ export class WorkerService {
         });
 
         const durationMs = Date.now() - startTime;
-        this.leaseManager.stopRenewal(jobId);
 
         if (this.leaseManager.hasLostOwnership(jobId)) {
           console.warn(
             `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Succeeded update skipped.`,
           );
+          this.leaseManager.stopRenewal(jobId);
         } else {
-          // Durable success transaction
-          const marked = await this.claimService.markJobSucceeded(
-            jobId,
-            claim.attemptId,
-            this.workerDbId,
-            durationMs,
-          );
+          // Durable success transaction while lease renewal remains active
+          let marked = false;
+          try {
+            marked = await this.claimService.markJobSucceeded(
+              jobId,
+              claim.attemptId,
+              this.workerDbId,
+              durationMs,
+            );
+          } finally {
+            this.leaseManager.stopRenewal(jobId);
+          }
 
           if (!marked) {
             console.warn(
@@ -338,25 +353,57 @@ export class WorkerService {
         }
       } catch (err: unknown) {
         const durationMs = Date.now() - startTime;
-        this.leaseManager.stopRenewal(jobId);
 
         if (this.leaseManager.hasLostOwnership(jobId)) {
           console.warn(
-            `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Failed update skipped.`,
+            `[Reloop Worker] Worker ${this.workerDbId} lost lease during execution of job ${jobId}. Failure update skipped.`,
           );
+          this.leaseManager.stopRenewal(jobId);
         } else {
-          // Durable failure transaction
-          const marked = await this.claimService.markJobFailed(
-            jobId,
-            claim.attemptId,
-            this.workerDbId,
-            durationMs,
-            err,
-          );
+          const classified = classifyJobError(err);
+          const attemptNumber = claim.attemptNumber!;
+          const maxAttempts = claim.job.maxAttempts;
+
+          let marked = false;
+          try {
+            if (this.retryPolicy.shouldRetry(classified, attemptNumber, maxAttempts)) {
+              // Branch 1: Retryable error and attempts remain -> RETRY_WAITING
+              const nextRunAt = this.retryPolicy.calculateNextRunAt(attemptNumber, classified.retryAfterMs);
+              marked = await this.claimService.markJobRetryWaiting(
+                jobId,
+                claim.attemptId,
+                this.workerDbId,
+                durationMs,
+                classified,
+                nextRunAt,
+              );
+            } else if (classified.retryable && attemptNumber >= maxAttempts) {
+              // Branch 2: Retryable error but attempts exhausted -> DEAD_LETTERED
+              marked = await this.claimService.markJobDeadLettered(
+                jobId,
+                claim.attemptId,
+                this.workerDbId,
+                durationMs,
+                classified,
+              );
+            } else {
+              // Branch 3: Non-retryable / Permanent failure -> FAILED
+              marked = await this.claimService.markJobFailed(
+                jobId,
+                claim.attemptId,
+                this.workerDbId,
+                durationMs,
+                classified,
+              );
+            }
+          } finally {
+            // Stop lease renewal ONLY after durable finalization transaction completes
+            this.leaseManager.stopRenewal(jobId);
+          }
 
           if (!marked) {
             console.warn(
-              `[Reloop Worker] Worker ${this.workerDbId} lost lease or ownership before marking job ${jobId} FAILED. Skipping XACK.`,
+              `[Reloop Worker] Worker ${this.workerDbId} lost lease before marking failure for job ${jobId}. Skipping XACK.`,
             );
           } else {
             // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK

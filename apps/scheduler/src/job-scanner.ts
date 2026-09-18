@@ -5,7 +5,7 @@ export interface ScannedJob {
   id: string;
   status: JobStatus;
   priority: number;
-  nextRunAt: Date;
+  nextRunAt: Date | null;
   createdAt: Date;
 }
 

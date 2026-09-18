@@ -436,7 +436,7 @@ model Job {
   payload            Json            @default("{}")
   attemptCount       Int             @default(0) @map("attempt_count")
   maxAttempts        Int             @default(3) @map("max_attempts")
-  nextRunAt          DateTime        @default(now()) @map("next_run_at")
+  nextRunAt          DateTime?       @default(now()) @map("next_run_at")
   idempotencyKey     String          @map("idempotency_key")
   claimedByWorkerId  String?         @map("claimed_by_worker_id") @db.Uuid
   leaseExpiresAt     DateTime?       @map("lease_expires_at")

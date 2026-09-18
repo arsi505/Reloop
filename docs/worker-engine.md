@@ -194,8 +194,8 @@ Workers register in the `workers` table on startup:
 ## 9. Day 7 Boundaries & Scope Freezing
 
 - **Canonical Claim Lifecycle**: Jobs transition `QUEUED / RETRY_WAITING` $\rightarrow$ `CLAIMED` $\rightarrow$ `RUNNING` $\rightarrow$ `SUCCEEDED / FAILED`. `CLAIMED` indicates acquired PostgreSQL ownership, lease creation, and `STARTED` attempt creation prior to handler invocation.
-- **Strict Scope of Atomic Claim**: Day 7 atomic claim accepts ONLY `QUEUED` and `RETRY_WAITING` (when `next_run_at IS NULL OR next_run_at <= NOW()`). Expired `CLAIMED` and expired `RUNNING` jobs are intentionally NOT claimed or recovered.
-- **Strict Lease Validity**: An expired lease cannot be renewed, transitioned into execution, or used to finalize a result (`SUCCEEDED` or `FAILED`). Expired lease = no permission to execute or finalize.
-- **No Stale PEL Recovery / No Expired Job Recovery**: Day 7 leaves unacknowledged crash messages in Redis PEL and expired jobs untouched in PostgreSQL. Day 7 does NOT implement `XAUTOCLAIM`, `XCLAIM`, or stale PEL recovery. Future recovery work will design stale PEL ownership transfer, expired lease recovery, and safe external-state verification.
-- **No Retry Engine**: If a handler throws an error in Day 7, the job and attempt are marked `FAILED` and acknowledged to prevent infinite tight loops. The retry engine, exponential backoff, jitter, and `RETRY_WAITING` pacing will be implemented in Day 8.
-- **No External Business Logic**: The executor registry currently provides only bounded test executors (`SYSTEM_NOOP` and `SYSTEM_DELAY`). Real recovery handlers and Shopify connectors remain deferred.
+- **Strict Scope of Atomic Claim**: Atomic claim accepts ONLY `QUEUED` and `RETRY_WAITING` (when `next_run_at IS NULL OR next_run_at <= NOW()`). Expired `CLAIMED` and expired `RUNNING` jobs are intentionally NOT claimed or recovered by worker claiming.
+- **Strict Lease Validity**: An expired lease cannot be renewed, transitioned into execution, or used to finalize a result (`SUCCEEDED`, `FAILED`, `RETRY_WAITING`, or `DEAD_LETTERED`). Expired lease = no permission to execute or finalize.
+- **No Stale PEL Recovery / No Expired Job Recovery**: Stale PEL recovery and expired lease recovery remain deferred to future reliability phases (`XAUTOCLAIM`/`XCLAIM` are not implemented).
+- **Day 8 Retry Engine**: Handlers throwing retryable errors (`TRANSIENT`, `RATE_LIMITED`) now transition to `RETRY_WAITING` with exponential backoff and jitter, or `DEAD_LETTERED` when attempts are exhausted. Non-retryable errors transition immediately to `FAILED`. See [retry-engine.md](./retry-engine.md) for full design.
+- **No External Business Logic**: Real recovery handlers and Shopify connectors remain deferred to subsequent milestones.

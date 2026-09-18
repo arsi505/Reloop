@@ -16,6 +16,8 @@ export interface WorkerConfig {
   jobLeaseRenewIntervalMs: number;
   workerShutdownTimeoutMs: number;
   blockTimeoutMs: number;
+  jobRetryDelaysMs: number[];
+  jobRetryJitterPercent: number;
 }
 
 export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
@@ -50,6 +52,23 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
   const rawBlockTimeout = overrides.blockTimeoutMs ?? (process.env.WORKER_BLOCK_TIMEOUT_MS ? parseInt(process.env.WORKER_BLOCK_TIMEOUT_MS, 10) : 1500);
   const blockTimeoutMs = Number.isFinite(rawBlockTimeout) ? rawBlockTimeout : 1500;
 
+  let jobRetryDelaysMs = overrides.jobRetryDelaysMs;
+  if (!jobRetryDelaysMs) {
+    const rawDelays = process.env.JOB_RETRY_DELAYS_MS;
+    if (rawDelays) {
+      jobRetryDelaysMs = rawDelays
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+    }
+    if (!jobRetryDelaysMs || jobRetryDelaysMs.length === 0) {
+      jobRetryDelaysMs = [30000, 120000, 600000, 1800000];
+    }
+  }
+
+  const rawJitter = overrides.jobRetryJitterPercent ?? (process.env.JOB_RETRY_JITTER_PERCENT ? parseInt(process.env.JOB_RETRY_JITTER_PERCENT, 10) : 15);
+  const jobRetryJitterPercent = Number.isFinite(rawJitter) ? rawJitter : 15;
+
   // Validation
   if (workerConcurrency <= 0) {
     throw new Error('Invalid configuration: workerConcurrency must be greater than 0');
@@ -74,6 +93,17 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
   if (blockTimeoutMs <= 0) {
     throw new Error('Invalid configuration: blockTimeoutMs must be greater than 0');
   }
+  if (!jobRetryDelaysMs || jobRetryDelaysMs.length === 0) {
+    throw new Error('Invalid configuration: jobRetryDelaysMs must contain at least one positive delay');
+  }
+  for (const d of jobRetryDelaysMs) {
+    if (d <= 0) {
+      throw new Error('Invalid configuration: all jobRetryDelaysMs must be greater than 0');
+    }
+  }
+  if (jobRetryJitterPercent < 0 || jobRetryJitterPercent > 100) {
+    throw new Error('Invalid configuration: jobRetryJitterPercent must be between 0 and 100');
+  }
 
   return {
     redisUrl,
@@ -88,5 +118,7 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
     jobLeaseRenewIntervalMs,
     workerShutdownTimeoutMs,
     blockTimeoutMs,
+    jobRetryDelaysMs,
+    jobRetryJitterPercent,
   };
 }

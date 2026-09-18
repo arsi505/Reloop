@@ -1,3 +1,6 @@
+import { JobErrorCategory } from '@prisma/client';
+import { JobExecutionError } from './errors';
+
 export interface JobContext {
   jobId: string;
   attemptNumber: number;
@@ -57,6 +60,49 @@ export class JobExecutorRegistry {
 
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       return { success: true, delayedMs: delayMs };
+    });
+
+    // SYSTEM_FAIL_TRANSIENT: Development/infrastructure transient error simulation
+    this.register('SYSTEM_FAIL_TRANSIENT', async (_context: JobContext) => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.TRANSIENT,
+        code: 'NETWORK_TIMEOUT',
+        message: 'Transient simulation network error',
+        retryable: true,
+      });
+    });
+
+    // SYSTEM_FAIL_RATE_LIMITED: Development/infrastructure rate limit simulation
+    this.register('SYSTEM_FAIL_RATE_LIMITED', async (context: JobContext) => {
+      let retryAfterMs = 500;
+      if (
+        context.payload !== null &&
+        typeof context.payload === 'object' &&
+        'retryAfterMs' in context.payload &&
+        typeof (context.payload as { retryAfterMs: unknown }).retryAfterMs === 'number'
+      ) {
+        const parsed = (context.payload as { retryAfterMs: number }).retryAfterMs;
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= 3600000) {
+          retryAfterMs = parsed;
+        }
+      }
+      throw new JobExecutionError({
+        category: JobErrorCategory.RATE_LIMITED,
+        code: 'RATE_LIMITED_429',
+        message: 'Provider rate limit encountered',
+        retryable: true,
+        retryAfterMs,
+      });
+    });
+
+    // SYSTEM_FAIL_PERMANENT: Development/infrastructure permanent error simulation
+    this.register('SYSTEM_FAIL_PERMANENT', async (_context: JobContext) => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'INVALID_DATA',
+        message: 'Permanent validation failure in business payload',
+        retryable: false,
+      });
     });
   }
 }

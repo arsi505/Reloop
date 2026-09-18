@@ -1,11 +1,13 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 import Redis from 'ioredis';
-import { PrismaClient, JobStatus, WorkerStatus, JobAttemptStatus } from '@prisma/client';
+import { PrismaClient, JobStatus, WorkerStatus, JobAttemptStatus, JobErrorCategory } from '@prisma/client';
 import { loadWorkerConfig } from '../src/config';
 import { JobClaimService } from '../src/job-claim';
 import { JobExecutorRegistry } from '../src/executor';
 import { WorkerService } from '../src/worker-service';
+import { JobExecutionError } from '../src/errors';
+import { RetryPolicy } from '../src/retry-policy';
 
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 dotenv.config();
@@ -15,7 +17,7 @@ const testDbUrl =
   'postgresql://reloop_app:change_me@localhost:5433/reloop_test?schema=public';
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6380';
 
-describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
+describe('Day 7 & Day 8: Distributed Worker Engine, Claims, Leases & Retries', () => {
   let prisma: PrismaClient;
   let redis: Redis;
   let testOrgId: string;
@@ -43,20 +45,12 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
   beforeEach(async () => {
     runId = Math.random().toString(36).substring(2, 9);
     testStreamKey = `reloop:test:worker:${runId}:jobs:ready`;
-    testGroup = `test-worker-group-${runId}`;
-
-    // Clean database in reverse dependency order
-    await prisma.jobAttempt.deleteMany({});
-    await prisma.job.deleteMany({});
-    await prisma.worker.deleteMany({});
-    await prisma.organizationMember.deleteMany({});
-    await prisma.organization.deleteMany({});
-    await prisma.user.deleteMany({});
+    testGroup = `test-group-${runId}`;
 
     const org = await prisma.organization.create({
       data: {
-        name: `Test Org ${runId}`,
-        slug: `test-org-${runId}`,
+        name: `Worker Test Org ${runId}`,
+        slug: `worker-org-${runId}`,
       },
     });
     testOrgId = org.id;
@@ -76,7 +70,11 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
     }
   });
 
-  function createWorker(overrides: Partial<Parameters<typeof loadWorkerConfig>[0]> = {}, executorRegistry?: JobExecutorRegistry): WorkerService {
+  function createWorker(
+    overrides: Partial<Parameters<typeof loadWorkerConfig>[0]> = {},
+    executorRegistry?: JobExecutorRegistry,
+    retryPolicy?: RetryPolicy,
+  ): WorkerService {
     const config = loadWorkerConfig({
       redisUrl,
       jobStreamKey: testStreamKey,
@@ -91,7 +89,7 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
       blockTimeoutMs: 100,
       ...overrides,
     });
-    const worker = new WorkerService(config, prisma, { executorRegistry });
+    const worker = new WorkerService(config, prisma, { executorRegistry, retryPolicy });
     activeWorkers.push(worker);
     return worker;
   }
@@ -101,9 +99,11 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
     status?: JobStatus;
     payload?: any;
     attemptCount?: number;
+    maxAttempts?: number;
     claimedByWorkerId?: string;
     leaseExpiresAt?: Date;
     nextRunAt?: Date;
+    idempotencyKey?: string;
   } = {}) {
     return prisma.job.create({
       data: {
@@ -112,10 +112,11 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
         status: data.status ?? JobStatus.QUEUED,
         payload: data.payload ?? {},
         attemptCount: data.attemptCount ?? 0,
+        maxAttempts: data.maxAttempts ?? 3,
         claimedByWorkerId: data.claimedByWorkerId ?? null,
         leaseExpiresAt: data.leaseExpiresAt ?? null,
         nextRunAt: data.nextRunAt,
-        idempotencyKey: `idemp-${runId}-${Math.random().toString(36).substring(2, 9)}`,
+        idempotencyKey: data.idempotencyKey ?? `idemp-${runId}-${Math.random().toString(36).substring(2, 9)}`,
       },
     });
   }
@@ -1004,5 +1005,397 @@ describe('Day 7: Distributed Worker Engine, Atomic Claims & Leases', () => {
     const untouchedFutureJob = await prisma.job.findUniqueOrThrow({ where: { id: futureJob.id } });
     expect(untouchedFutureJob.status).toBe(JobStatus.RETRY_WAITING);
     expect(untouchedFutureJob.attemptCount).toBe(1);
+  });
+
+  // =========================================================================
+  // Day 8 Tests: Retry, Backoff, Dead-Letter & All-or-Nothing Transactions
+  // =========================================================================
+
+  // Test Z1: Fail-once transient failure -> RETRY_WAITING -> scheduler redispatch -> attempt 2 SUCCEEDED
+  it('Z1. transient failure -> RETRY_WAITING -> redispatch -> attempt 2 SUCCEEDED, history preserved, idempotencyKey unchanged', async () => {
+    let runs = 0;
+    const registry = new JobExecutorRegistry();
+    registry.register('FAIL_ONCE_JOB', async () => {
+      runs++;
+      if (runs === 1) {
+        throw new JobExecutionError({
+          category: JobErrorCategory.TRANSIENT,
+          code: 'NETWORK_TIMEOUT',
+          message: 'Simulated connection dropped',
+        });
+      }
+      return { success: true };
+    });
+
+    const testPolicy = new RetryPolicy({
+      delaysMs: [250],
+      jitterPercent: 0,
+      randomFn: () => 0.5,
+    });
+
+    const worker = createWorker({}, registry, testPolicy);
+    await worker.start();
+
+    const job = await createTestJob({
+      type: 'FAIL_ONCE_JOB',
+      maxAttempts: 3,
+    });
+    const initialIdempotencyKey = job.idempotencyKey;
+
+    const msgId1 = await publishJob(job.id, 'FAIL_ONCE_JOB');
+
+    // Wait for attempt 1 to execute and fail
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // 1. Verify Attempt 1 resulted in RETRY_WAITING
+    const jobAfterAttempt1 = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(jobAfterAttempt1.status).toBe(JobStatus.RETRY_WAITING);
+    expect(jobAfterAttempt1.attemptCount).toBe(1);
+    expect(jobAfterAttempt1.nextRunAt!.getTime()).toBeGreaterThan(Date.now() - 50);
+    expect(jobAfterAttempt1.claimedByWorkerId).toBeNull();
+    expect(jobAfterAttempt1.leaseExpiresAt).toBeNull();
+    expect(jobAfterAttempt1.completedAt).toBeNull();
+    expect(jobAfterAttempt1.idempotencyKey).toBe(initialIdempotencyKey);
+
+    // JobAttempt 1 recorded as FAILED with category TRANSIENT
+    const attempts1 = await prisma.jobAttempt.findMany({ where: { jobId: job.id } });
+    expect(attempts1.length).toBe(1);
+    expect(attempts1[0].status).toBe(JobAttemptStatus.FAILED);
+    expect(attempts1[0].errorCategory).toBe(JobErrorCategory.TRANSIENT);
+    expect(attempts1[0].errorCode).toBe('NETWORK_TIMEOUT');
+    expect(attempts1[0].finishedAt).toBeInstanceOf(Date);
+
+    // Current message ACKed from Redis
+    const pending1 = (await redis.xpending(testStreamKey, testGroup, '-', '+', 10)) as any[];
+    expect(pending1.find((p) => p[0] === msgId1)).toBeUndefined();
+
+    // 2. Before nextRunAt is reached, job is not yet due
+    const notYetDue = await prisma.job.findMany({
+      where: {
+        id: job.id,
+        status: JobStatus.RETRY_WAITING,
+        nextRunAt: { lte: new Date(Date.now() - 50) },
+      },
+    });
+    expect(notYetDue.length).toBe(0);
+
+    // 3. Wait until nextRunAt is reached
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Simulate scheduler redispatch: publish new message containing only jobId
+    await publishJob(job.id, 'FAIL_ONCE_JOB');
+
+    // Wait for worker to consume attempt 2
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // 4. Verify Attempt 2 resulted in SUCCEEDED
+    const finalJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(finalJob.status).toBe(JobStatus.SUCCEEDED);
+    expect(finalJob.attemptCount).toBe(2);
+    expect(finalJob.completedAt).toBeInstanceOf(Date);
+    expect(finalJob.idempotencyKey).toBe(initialIdempotencyKey); // STRICTLY UNCHANGED!
+
+    // Both attempt records preserved in database
+    const finalAttempts = await prisma.jobAttempt.findMany({
+      where: { jobId: job.id },
+      orderBy: { attemptNumber: 'asc' },
+    });
+    expect(finalAttempts.length).toBe(2);
+    expect(finalAttempts[0].attemptNumber).toBe(1);
+    expect(finalAttempts[0].status).toBe(JobAttemptStatus.FAILED);
+    expect(finalAttempts[1].attemptNumber).toBe(2);
+    expect(finalAttempts[1].status).toBe(JobAttemptStatus.SUCCEEDED);
+  });
+
+  // Test Z2: RATE_LIMITED respects retryAfterMs
+  it('Z2. RATE_LIMITED error respects retryAfterMs and sets nextRunAt accordingly', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('RATE_LIMITED_JOB', async () => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.RATE_LIMITED,
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Rate limit exceeded',
+        retryAfterMs: 600, // 600ms
+      });
+    });
+
+    const testPolicy = new RetryPolicy({
+      delaysMs: [100], // normally 100ms
+      jitterPercent: 0,
+      randomFn: () => 0.5,
+    });
+
+    const worker = createWorker({}, registry, testPolicy);
+    await worker.start();
+
+    const beforeTime = Date.now();
+    const job = await createTestJob({
+      type: 'RATE_LIMITED_JOB',
+      maxAttempts: 3,
+    });
+
+    await publishJob(job.id, 'RATE_LIMITED_JOB');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const failedJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(failedJob.status).toBe(JobStatus.RETRY_WAITING);
+    // nextRunAt should be at least beforeTime + 550ms
+    expect(failedJob.nextRunAt!.getTime()).toBeGreaterThanOrEqual(beforeTime + 550);
+
+    const attempts = await prisma.jobAttempt.findMany({ where: { jobId: job.id } });
+    expect(attempts.length).toBe(1);
+    expect(attempts[0].errorCategory).toBe(JobErrorCategory.RATE_LIMITED);
+    expect(attempts[0].errorCode).toBe('TOO_MANY_REQUESTS');
+  });
+
+  // Test Z3: BUSINESS_ERROR permanent failure -> FAILED immediately
+  it('Z3. BUSINESS_ERROR permanent failure -> FAILED immediately without retry', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('BUSINESS_FAIL_JOB', async () => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'INVALID_ORDER',
+        message: 'Order validation failed permanently',
+        retryable: false,
+      });
+    });
+
+    const worker = createWorker({}, registry);
+    await worker.start();
+
+    const job = await createTestJob({
+      type: 'BUSINESS_FAIL_JOB',
+      maxAttempts: 3,
+    });
+
+    const msgId = await publishJob(job.id, 'BUSINESS_FAIL_JOB');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const failedJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(failedJob.status).toBe(JobStatus.FAILED);
+    expect(failedJob.nextRunAt).toBeNull();
+    expect(failedJob.completedAt).toBeInstanceOf(Date);
+    expect(failedJob.claimedByWorkerId).toBeNull();
+    expect(failedJob.leaseExpiresAt).toBeNull();
+
+    const attempts = await prisma.jobAttempt.findMany({ where: { jobId: job.id } });
+    expect(attempts.length).toBe(1);
+    expect(attempts[0].status).toBe(JobAttemptStatus.FAILED);
+    expect(attempts[0].errorCategory).toBe(JobErrorCategory.BUSINESS_ERROR);
+
+    // Message ACKed
+    const pending = (await redis.xpending(testStreamKey, testGroup, '-', '+', 10)) as any[];
+    expect(pending.find((p) => p[0] === msgId)).toBeUndefined();
+  });
+
+  // Test Z4: Max attempts exhausted -> DEAD_LETTERED
+  it('Z4. maximum attempts exhausted -> DEAD_LETTERED with attempt history and clean ownership', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('ALWAYS_FAIL_JOB', async () => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.TRANSIENT,
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Service is down',
+      });
+    });
+
+    const testPolicy = new RetryPolicy({
+      delaysMs: [100],
+      jitterPercent: 0,
+      randomFn: () => 0.5,
+    });
+
+    const worker = createWorker({}, registry, testPolicy);
+    await worker.start();
+
+    // maxAttempts = 2
+    const job = await createTestJob({
+      type: 'ALWAYS_FAIL_JOB',
+      maxAttempts: 2,
+    });
+
+    // Attempt 1
+    await publishJob(job.id, 'ALWAYS_FAIL_JOB');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const job1 = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(job1.status).toBe(JobStatus.RETRY_WAITING);
+    expect(job1.attemptCount).toBe(1);
+
+    // Wait for nextRunAt and publish Attempt 2
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await publishJob(job.id, 'ALWAYS_FAIL_JOB');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // After attempt 2 (maxAttempts = 2 exhausted)
+    const deadJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(deadJob.status).toBe(JobStatus.DEAD_LETTERED);
+    expect(deadJob.attemptCount).toBe(2);
+    expect(deadJob.nextRunAt).toBeNull();
+    expect(deadJob.completedAt).toBeInstanceOf(Date);
+    expect(deadJob.claimedByWorkerId).toBeNull();
+    expect(deadJob.leaseExpiresAt).toBeNull();
+
+    // Exactly 2 attempts exist, both FAILED
+    const attempts = await prisma.jobAttempt.findMany({
+      where: { jobId: job.id },
+      orderBy: { attemptNumber: 'asc' },
+    });
+    expect(attempts.length).toBe(2);
+    expect(attempts[0].attemptNumber).toBe(1);
+    expect(attempts[0].status).toBe(JobAttemptStatus.FAILED);
+    expect(attempts[1].attemptNumber).toBe(2);
+    expect(attempts[1].status).toBe(JobAttemptStatus.FAILED);
+  });
+
+  // Test Z5: Maximum attempts = 1
+  it('Z5. maximum attempts = 1: first retryable failure immediately results in DEAD_LETTERED', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('SINGLE_ATTEMPT_JOB', async () => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.TRANSIENT,
+        code: 'TIMEOUT',
+        message: 'Timeout on single attempt',
+      });
+    });
+
+    const worker = createWorker({}, registry);
+    await worker.start();
+
+    const job = await createTestJob({
+      type: 'SINGLE_ATTEMPT_JOB',
+      maxAttempts: 1,
+    });
+
+    await publishJob(job.id, 'SINGLE_ATTEMPT_JOB');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const deadJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(deadJob.status).toBe(JobStatus.DEAD_LETTERED);
+    expect(deadJob.attemptCount).toBe(1);
+    expect(deadJob.nextRunAt).toBeNull();
+    expect(deadJob.completedAt).toBeInstanceOf(Date);
+
+    const attempts = await prisma.jobAttempt.findMany({ where: { jobId: job.id } });
+    expect(attempts.length).toBe(1);
+    expect(attempts[0].status).toBe(JobAttemptStatus.FAILED);
+  });
+
+  // Test Z6: Ownership-fenced Job update returning zero rows rolls back transaction (all-or-nothing)
+  it('Z6. ownership fence failure: 0 rows updated rolls back entire transaction and JobAttempt does NOT become FAILED', async () => {
+    const claimService = new JobClaimService(prisma);
+
+    const w1 = await prisma.worker.create({
+      data: { workerKey: `w1-z6-${runId}`, status: WorkerStatus.ONLINE },
+    });
+
+    // Create a job in CLAIMED status (not RUNNING, so fenced update will match 0 rows)
+    const job = await createTestJob({
+      status: JobStatus.CLAIMED,
+      claimedByWorkerId: w1.id,
+      leaseExpiresAt: new Date(Date.now() + 15000),
+      attemptCount: 1,
+    });
+
+    const attempt = await prisma.jobAttempt.create({
+      data: {
+        jobId: job.id,
+        workerId: w1.id,
+        attemptNumber: 1,
+        status: JobAttemptStatus.STARTED,
+      },
+    });
+
+    const testError = new JobExecutionError({
+      category: JobErrorCategory.TRANSIENT,
+      code: 'TEST_ROLLBACK',
+      message: 'Rollback test',
+    });
+
+    // Attempt markJobRetryWaiting - fenced query returns 0 rows, throws inside transaction, catches and returns false
+    const result = await claimService.markJobRetryWaiting(
+      job.id,
+      attempt.id,
+      w1.id,
+      100,
+      testError,
+      new Date(Date.now() + 10000),
+    );
+
+    expect(result).toBe(false);
+
+    // CRITICAL ASSERTION:
+    // Because the transaction rolled back, JobAttempt MUST NOT be FAILED!
+    const unchangedAttempt = await prisma.jobAttempt.findUniqueOrThrow({ where: { id: attempt.id } });
+    expect(unchangedAttempt.status).toBe(JobAttemptStatus.STARTED);
+    expect(unchangedAttempt.finishedAt).toBeNull();
+
+    // Job must remain CLAIMED
+    const unchangedJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(unchangedJob.status).toBe(JobStatus.CLAIMED);
+  });
+
+  // Test Z7: DB failure prevents XACK
+  it('Z7. DB failure prevents XACK: message remains in Redis PEL', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('DB_FAIL_JOB', async () => {
+      throw new Error('Handler fail');
+    });
+
+    const worker = createWorker({}, registry);
+
+    // Mock claimService.markJobFailed to return false (simulating DB transaction failure/lease loss)
+    const originalStart = worker.start.bind(worker);
+    await worker.start();
+
+    // Force claimService inside worker to fail finalization
+    (worker as any).claimService.markJobFailed = jest.fn().mockResolvedValue(false);
+
+    const job = await createTestJob({ type: 'DB_FAIL_JOB' });
+    const msgId = await publishJob(job.id, 'DB_FAIL_JOB');
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Verify Redis message was NOT ACKed and remains in PEL
+    const pending = (await redis.xpending(testStreamKey, testGroup, '-', '+', 10)) as any[];
+    const entry = pending.find((p) => p[0] === msgId);
+    expect(entry).toBeDefined();
+  });
+
+  // Test Z8: XACK failure after DB commit preserves committed DB state
+  it('Z8. XACK failure after DB commit preserves committed DB state', async () => {
+    const registry = new JobExecutorRegistry();
+    registry.register('XACK_FAIL_JOB', async () => {
+      throw new JobExecutionError({
+        category: JobErrorCategory.TRANSIENT,
+        code: 'TRANSIENT_FAIL',
+        message: 'Transient failure',
+      });
+    });
+
+    const testPolicy = new RetryPolicy({
+      delaysMs: [1000],
+      jitterPercent: 0,
+      randomFn: () => 0.5,
+    });
+
+    const worker = createWorker({}, registry, testPolicy);
+    await worker.start();
+
+    // Mock commandRedis.xack to reject
+    (worker as any).commandRedis.xack = jest.fn().mockRejectedValue(new Error('Redis connection dropped'));
+
+    const job = await createTestJob({ type: 'XACK_FAIL_JOB' });
+    await publishJob(job.id, 'XACK_FAIL_JOB');
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The database transaction was already committed: status is RETRY_WAITING!
+    const committedJob = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(committedJob.status).toBe(JobStatus.RETRY_WAITING);
+    expect(committedJob.attemptCount).toBe(1);
+
+    const attempt = await prisma.jobAttempt.findFirstOrThrow({ where: { jobId: job.id } });
+    expect(attempt.status).toBe(JobAttemptStatus.FAILED);
   });
 });
