@@ -1,6 +1,6 @@
 # Reloop Architecture Plan
 
-> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, and the Redis Streams job dispatch scheduler are fully implemented and verified. Upcoming Day 7 will implement worker job execution and atomic claiming.
+> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, the Redis Streams job dispatch scheduler, and the distributed worker engine (canonical CLAIMED -> RUNNING lifecycle, atomic claims, lease management, and execution tracing) are fully implemented and verified. Upcoming Day 8 will implement retry classification, exponential backoff, jitter, and RETRY_WAITING pacing. Stale PEL recovery and expired lease crash recovery remain a separate later reliability step.
 
 ---
 

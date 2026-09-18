@@ -1,45 +1,46 @@
-import * as dotenv from 'dotenv';
-import Redis from 'ioredis';
+import { PrismaClient } from '@prisma/client';
+import { loadWorkerConfig } from './config';
+import { WorkerService } from './worker-service';
 
-dotenv.config();
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6380';
-const DATABASE_URL = process.env.DATABASE_URL;
+export * from './config';
+export * from './executor';
+export * from './heartbeat';
+export * from './job-claim';
+export * from './lease-manager';
+export * from './worker-service';
 
 async function bootstrap() {
-  console.log('[Reloop Worker] Starting worker skeleton service...');
-  console.log(`[Reloop Worker] Configuration loaded (Redis: ${REDIS_URL}, Database configured: ${Boolean(DATABASE_URL)})`);
+  const config = loadWorkerConfig();
+  console.log(`[Reloop Worker] Initializing worker instance: ${config.workerKey} (${config.workerConsumerName})`);
+  console.log(
+    `[Reloop Worker] Configuration: Redis=${config.redisUrl}, Stream=${config.jobStreamKey}, Group=${config.jobConsumerGroup}, Concurrency=${config.workerConcurrency}, Lease=${config.jobLeaseDurationMs}ms, RenewInterval=${config.jobLeaseRenewIntervalMs}ms`,
+  );
 
-  let redis: Redis | null = null;
-  try {
-    redis = new Redis(REDIS_URL, {
-      maxRetriesPerRequest: 1,
-      connectTimeout: 3000,
-      lazyConnect: true,
-    });
-    await redis.connect();
-    const pong = await redis.ping();
-    console.log(`[Reloop Worker] Coordination infrastructure reachable (Redis PING -> ${pong})`);
-  } catch (err) {
-    console.warn('[Reloop Worker] Warning: Could not reach Redis on initial ping:', (err as Error).message);
-  }
-
-  console.log('[Reloop Worker] Service initialized in skeleton mode (no stream consumers active). Ready.');
+  const prisma = new PrismaClient();
+  const workerService = new WorkerService(config, prisma);
 
   const shutdown = async (signal: string) => {
-    console.log(`[Reloop Worker] Received ${signal}. Shutting down gracefully...`);
-    if (redis) {
-      await redis.quit().catch(() => {});
-    }
-    console.log('[Reloop Worker] Shutdown complete.');
+    console.log(`[Reloop Worker] Received ${signal}. Initiating graceful shutdown...`);
+    await workerService.stop();
+    await prisma.$disconnect();
+    console.log('[Reloop Worker] Graceful shutdown complete. Exiting.');
     process.exit(0);
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  try {
+    await workerService.start();
+    console.log('[Reloop Worker] Worker engine running actively.');
+  } catch (err) {
+    console.error('[Reloop Worker] Fatal error starting worker:', err);
+    await workerService.stop().catch(() => {});
+    await prisma.$disconnect().catch(() => {});
+    process.exit(1);
+  }
 }
 
-bootstrap().catch((err) => {
-  console.error('[Reloop Worker] Fatal error during bootstrap:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  bootstrap();
+}
