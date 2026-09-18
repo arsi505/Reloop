@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { SchedulerConfig } from './config';
 import { JobScanner } from './job-scanner';
 import { RedisPublisher } from './redis-publisher';
+import { WorkflowCoordinator } from './workflow-coordinator';
 
 export interface SchedulerMetrics {
   scannedCount: number;
@@ -25,6 +26,7 @@ export class SchedulerService {
   private prisma: PrismaClient;
   private publisher: RedisPublisher;
   private scanner: JobScanner;
+  private coordinator?: WorkflowCoordinator;
 
   private isRunning: boolean = false;
   private isTickRunning: boolean = false;
@@ -43,11 +45,13 @@ export class SchedulerService {
     config: SchedulerConfig,
     prisma: PrismaClient,
     publisher: RedisPublisher,
+    coordinator?: WorkflowCoordinator,
   ) {
     this.config = config;
     this.prisma = prisma;
     this.publisher = publisher;
     this.scanner = new JobScanner(prisma, config);
+    this.coordinator = coordinator;
   }
 
   async start(): Promise<void> {
@@ -60,6 +64,10 @@ export class SchedulerService {
     this.isRunning = true;
 
     console.log(`[Reloop Scheduler] Service started with interval ${this.config.schedulerIntervalMs}ms, batch size ${this.config.schedulerBatchSize}, marker TTL ${this.config.dispatchMarkerTtlMs}ms`);
+
+    if (this.coordinator) {
+      await this.coordinator.start();
+    }
 
     // Run first tick immediately, then schedule subsequent ticks
     this.scheduleNextTick(0);
@@ -157,8 +165,16 @@ export class SchedulerService {
       waited += pollIntervalMs;
     }
 
+    if (this.coordinator) {
+      await this.coordinator.stop();
+    }
+
     await this.publisher.close();
     console.log('[Reloop Scheduler] Service stopped cleanly.');
+  }
+
+  getCoordinator(): WorkflowCoordinator | undefined {
+    return this.coordinator;
   }
 
   getMetrics(): SchedulerMetrics {

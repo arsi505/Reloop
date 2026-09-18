@@ -13,6 +13,7 @@
   "dependencies": {
     "@prisma/client": "^6.4.1",
     "@reloop/database": "*",
+    "@reloop/workflow-core": "*",
     "dotenv": "^16.4.7",
     "ioredis": "^5.5.0"
   },

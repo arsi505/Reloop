@@ -8,6 +8,8 @@ export interface JobContext {
   payload: unknown;
   workerId: string;
   organizationId: string;
+  workflowId?: string | null;
+  workflowStepId?: string | null;
 }
 
 export type JobHandler = (context: JobContext) => Promise<unknown>;

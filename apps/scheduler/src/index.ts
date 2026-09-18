@@ -1,12 +1,16 @@
 import { PrismaClient } from '@prisma/client';
+import { WorkflowTemplateRegistry, registerSystemTemplates } from '@reloop/workflow-core';
 import { loadSchedulerConfig } from './config';
 import { RedisPublisher } from './redis-publisher';
 import { SchedulerService } from './scheduler-service';
+import { WorkflowCoordinator } from './workflow-coordinator';
 
 export * from './config';
 export * from './redis-publisher';
 export * from './job-scanner';
 export * from './scheduler-service';
+export * from './workflow-coordinator';
+export * from './workflow-creator';
 
 async function bootstrap() {
   const config = loadSchedulerConfig();
@@ -15,7 +19,10 @@ async function bootstrap() {
 
   const prisma = new PrismaClient();
   const publisher = new RedisPublisher(config);
-  const scheduler = new SchedulerService(config, prisma, publisher);
+  const templateRegistry = new WorkflowTemplateRegistry();
+  registerSystemTemplates(templateRegistry);
+  const coordinator = new WorkflowCoordinator(prisma, templateRegistry, config);
+  const scheduler = new SchedulerService(config, prisma, publisher, coordinator);
 
   const shutdown = async (signal: string) => {
     console.log(`[Reloop Scheduler] Received ${signal}. Initiating graceful shutdown...`);

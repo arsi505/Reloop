@@ -1,6 +1,6 @@
 # Reloop Architecture Plan
 
-> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, the Redis Streams job dispatch scheduler, the distributed worker engine (canonical CLAIMED -> RUNNING lifecycle, atomic claims, lease management, and execution tracing), retry classification/backoff/dead-lettering, and worker crash recovery via Redis XAUTOCLAIM and PostgreSQL lease fencing are fully implemented and verified.
+> **Note**: This document defines the technical architecture for Reloop. Core authentication, multi-tenant isolation, the deterministic external simulator, the durable PostgreSQL core reliability data model, the Redis Streams job dispatch scheduler, the distributed worker engine (canonical CLAIMED -> RUNNING lifecycle, atomic claims, lease management, and execution tracing), retry classification/backoff/dead-lettering, worker crash recovery via Redis XAUTOCLAIM and PostgreSQL lease fencing, and the versioned workflow / DAG orchestration engine are fully implemented and verified.
 
 ---
 
@@ -146,3 +146,12 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
   - **Active Leases**: Left untouched.
   - **Terminal / RETRY_WAITING**: Obsolete PEL signals are XACKed without execution.
   - **Transaction Ordering**: PostgreSQL commit is executed before Redis `XACK`. See [crash-recovery.md](./crash-recovery.md).
+
+---
+
+## 8. Versioned Workflow & DAG Orchestration Engine
+
+- **Fixed Versioned Templates**: Defined in `@reloop/workflow-core`, templates are immutable definitions referenced by `(templateKey, templateVersion)`. Validated with DAG cycle detection.
+- **Durable Step Execution**: Each workflow step corresponds to exactly one durable PostgreSQL `Job` (`type = 'WORKFLOW_STEP'`). Retries reuse the same Job and same `WorkflowStep`, tracking attempts via `JobAttempt`.
+- **Workflow Coordinator**: Background poller in `apps/scheduler` that evaluates DAG completion, reconciles step job states, evaluates safe declarative conditions, atomicity via `ON CONFLICT DO NOTHING`, and progresses workflow state.
+- **Worker Execution & Fencing**: `WorkflowStepExecutor` in `apps/worker` enforces tenant isolation, terminal workflow execution fences, and safe step state transitions (`READY -> RUNNING -> SUCCEEDED / FAILED`). See [workflow-engine.md](./workflow-engine.md).

@@ -8,6 +8,8 @@ export interface ClaimResult {
   job?: {
     id: string;
     organizationId: string;
+    workflowId?: string | null;
+    workflowStepId?: string | null;
     type: string;
     payload: unknown;
     attemptCount: number;
@@ -24,6 +26,8 @@ export interface RecoverClaimedResult {
   job?: {
     id: string;
     organizationId: string;
+    workflowId?: string | null;
+    workflowStepId?: string | null;
     type: string;
     payload: unknown;
     attemptCount: number;
@@ -58,6 +62,8 @@ export class JobClaimService {
         Array<{
           id: string;
           organizationId: string;
+          workflowId: string | null;
+          workflowStepId: string | null;
           type: string;
           payload: unknown;
           attemptCount: number;
@@ -78,6 +84,8 @@ export class JobClaimService {
         RETURNING
           id,
           organization_id as "organizationId",
+          workflow_id as "workflowId",
+          workflow_step_id as "workflowStepId",
           type,
           payload,
           attempt_count as "attemptCount",
@@ -171,30 +179,49 @@ export class JobClaimService {
   /**
    * Marks Job and JobAttempt as SUCCEEDED in a single transaction.
    * Verifies worker ownership and unexpired lease.
+   * Stores execution result durably into job payload under 'result' key if provided.
    */
   async markJobSucceeded(
     jobId: string,
     attemptId: string,
     workerDbId: string,
     durationMs: number,
+    result?: unknown,
   ): Promise<boolean> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const jobUpdated = await tx.$executeRaw`
-          UPDATE jobs
-          SET
-            status = 'SUCCEEDED'::"JobStatus",
-            completed_at = NOW(),
-            lease_expires_at = NULL,
-            claimed_by_worker_id = NULL,
-            updated_at = NOW()
-          WHERE
-            id = ${jobId}::uuid
-            AND claimed_by_worker_id = ${workerDbId}::uuid
-            AND status = 'RUNNING'::"JobStatus"
-            AND lease_expires_at IS NOT NULL
-            AND lease_expires_at > NOW()
-        `;
+        const jobUpdated = result !== undefined
+          ? await tx.$executeRaw`
+            UPDATE jobs
+            SET
+              status = 'SUCCEEDED'::"JobStatus",
+              payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{result}', ${JSON.stringify(result ?? null)}::jsonb, true),
+              completed_at = NOW(),
+              lease_expires_at = NULL,
+              claimed_by_worker_id = NULL,
+              updated_at = NOW()
+            WHERE
+              id = ${jobId}::uuid
+              AND claimed_by_worker_id = ${workerDbId}::uuid
+              AND status = 'RUNNING'::"JobStatus"
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at > NOW()
+          `
+          : await tx.$executeRaw`
+            UPDATE jobs
+            SET
+              status = 'SUCCEEDED'::"JobStatus",
+              completed_at = NOW(),
+              lease_expires_at = NULL,
+              claimed_by_worker_id = NULL,
+              updated_at = NOW()
+            WHERE
+              id = ${jobId}::uuid
+              AND claimed_by_worker_id = ${workerDbId}::uuid
+              AND status = 'RUNNING'::"JobStatus"
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at > NOW()
+          `;
 
         if (jobUpdated === 0) {
           throw new Error(`Ownership fence failed: Job ${jobId} not in RUNNING or lease expired`);
@@ -433,6 +460,8 @@ export class JobClaimService {
           Array<{
             id: string;
             organizationId: string;
+            workflowId: string | null;
+            workflowStepId: string | null;
             type: string;
             payload: unknown;
             attemptCount: number;
@@ -442,6 +471,8 @@ export class JobClaimService {
           SELECT
             id,
             organization_id as "organizationId",
+            workflow_id as "workflowId",
+            workflow_step_id as "workflowStepId",
             type,
             payload,
             attempt_count as "attemptCount",

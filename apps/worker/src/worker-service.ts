@@ -1,6 +1,6 @@
 import * as os from 'os';
 import Redis from 'ioredis';
-import { PrismaClient, WorkerStatus } from '@prisma/client';
+import { PrismaClient, Prisma, WorkerStatus } from '@prisma/client';
 import { WorkerConfig } from './config';
 import { JobExecutorRegistry } from './executor';
 import { JobClaimService } from './job-claim';
@@ -9,6 +9,8 @@ import { WorkerHeartbeat } from './heartbeat';
 import { RetryPolicy } from './retry-policy';
 import { classifyJobError } from './errors';
 import { StaleMessageRecoveryService } from './stale-message-recovery';
+import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
+import { WorkflowStepExecutor } from './workflow-step-executor';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -18,6 +20,7 @@ export class WorkerService {
   private readRedis: Redis;
   private commandRedis: Redis;
   private executorRegistry: JobExecutorRegistry;
+  private stepHandlerRegistry: WorkflowStepHandlerRegistry;
   private retryPolicy: RetryPolicy;
 
   private workerDbId: string = '';
@@ -40,12 +43,22 @@ export class WorkerService {
       readRedis?: Redis;
       commandRedis?: Redis;
       executorRegistry?: JobExecutorRegistry;
+      stepHandlerRegistry?: WorkflowStepHandlerRegistry;
       retryPolicy?: RetryPolicy;
     } = {},
   ) {
     this.config = config;
     this.prisma = prisma;
     this.executorRegistry = options.executorRegistry ?? new JobExecutorRegistry();
+    this.stepHandlerRegistry = options.stepHandlerRegistry ?? new WorkflowStepHandlerRegistry();
+
+    if (!this.executorRegistry.has('WORKFLOW_STEP')) {
+      const stepExecutor = new WorkflowStepExecutor(this.prisma, this.stepHandlerRegistry);
+      this.executorRegistry.register('WORKFLOW_STEP', async (ctx) => {
+        return await stepExecutor.execute(ctx);
+      });
+    }
+
     this.retryPolicy =
       options.retryPolicy ??
       new RetryPolicy({
@@ -354,6 +367,8 @@ export class WorkerService {
     job: {
       id: string;
       organizationId: string;
+      workflowId?: string | null;
+      workflowStepId?: string | null;
       type: string;
       payload: unknown;
       attemptCount: number;
@@ -388,13 +403,15 @@ export class WorkerService {
     const startTime = Date.now();
     try {
       // Execute handler
-      await this.executorRegistry.execute(job.type, {
+      const result = await this.executorRegistry.execute(job.type, {
         jobId,
         attemptNumber,
         type: job.type,
         payload: job.payload,
         workerId: this.workerDbId,
         organizationId: job.organizationId,
+        workflowId: job.workflowId,
+        workflowStepId: job.workflowStepId,
       });
 
       const durationMs = Date.now() - startTime;
@@ -413,6 +430,7 @@ export class WorkerService {
             attemptId,
             this.workerDbId,
             durationMs,
+            result,
           );
         } finally {
           this.leaseManager.stopRenewal(jobId);
@@ -423,6 +441,30 @@ export class WorkerService {
             `[Reloop Worker] Worker ${this.workerDbId} lost lease or ownership before marking job ${jobId} SUCCEEDED. Skipping XACK.`,
           );
         } else {
+          // Authoritative lease confirmed: update WorkflowStep to SUCCEEDED with durable output
+          if (job.workflowStepId) {
+            try {
+              const stepOutput =
+                result && typeof result === 'object' && 'output' in result
+                  ? (result as { output: unknown }).output
+                  : result;
+
+              await this.prisma.workflowStep.update({
+                where: { id: job.workflowStepId },
+                data: {
+                  status: 'SUCCEEDED',
+                  output: (stepOutput as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+                  completedAt: new Date(),
+                },
+              });
+            } catch (stepErr) {
+              console.warn(
+                `[Reloop Worker] Failed updating workflowStep ${job.workflowStepId} to SUCCEEDED (will be reconciled by coordinator):`,
+                stepErr,
+              );
+            }
+          }
+
           // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
           await this.commandRedis.xack(
             this.config.jobStreamKey,
@@ -444,6 +486,7 @@ export class WorkerService {
         const maxAttempts = job.maxAttempts;
 
         let marked = false;
+        let isTerminalFailure = false;
         try {
           if (this.retryPolicy.shouldRetry(classified, attemptNumber, maxAttempts)) {
             // Branch 1: Retryable error and attempts remain -> RETRY_WAITING
@@ -458,6 +501,7 @@ export class WorkerService {
             );
           } else if (classified.retryable && attemptNumber >= maxAttempts) {
             // Branch 2: Retryable error but attempts exhausted -> DEAD_LETTERED
+            isTerminalFailure = true;
             marked = await this.claimService.markJobDeadLettered(
               jobId,
               attemptId,
@@ -467,6 +511,7 @@ export class WorkerService {
             );
           } else {
             // Branch 3: Non-retryable / Permanent failure -> FAILED
+            isTerminalFailure = true;
             marked = await this.claimService.markJobFailed(
               jobId,
               attemptId,
@@ -485,6 +530,24 @@ export class WorkerService {
             `[Reloop Worker] Worker ${this.workerDbId} lost lease before marking failure for job ${jobId}. Skipping XACK.`,
           );
         } else {
+          // If terminal failure and job has workflowStepId, reconcile step to FAILED
+          if (isTerminalFailure && job.workflowStepId) {
+            await this.prisma.workflowStep
+              .update({
+                where: { id: job.workflowStepId },
+                data: {
+                  status: 'FAILED',
+                  completedAt: new Date(),
+                },
+              })
+              .catch((stepErr) => {
+                console.warn(
+                  `[Reloop Worker] Failed updating workflowStep ${job.workflowStepId} to FAILED (will be reconciled by coordinator):`,
+                  stepErr,
+                );
+              });
+          }
+
           // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
           await this.commandRedis.xack(
             this.config.jobStreamKey,
@@ -605,6 +668,10 @@ export class WorkerService {
 
   getExecutorRegistry(): JobExecutorRegistry {
     return this.executorRegistry;
+  }
+
+  getStepHandlerRegistry(): WorkflowStepHandlerRegistry {
+    return this.stepHandlerRegistry;
   }
 
   getRecoveryService(): StaleMessageRecoveryService {

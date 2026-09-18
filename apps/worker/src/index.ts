@@ -11,6 +11,8 @@ export * from './job-claim';
 export * from './lease-manager';
 export * from './retry-policy';
 export * from './stale-message-recovery';
+export * from './workflow-step-registry';
+export * from './workflow-step-executor';
 export * from './worker-service';
 
 async function bootstrap() {
