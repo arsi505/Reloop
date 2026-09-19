@@ -1,4 +1,4 @@
-# Reloop Versioned Workflow & DAG Orchestration Engine
+ï»¿# Reloop Versioned Workflow & DAG Orchestration Engine
 
 ## 1. Overview & Architecture
 
@@ -6,40 +6,40 @@ Reloop Day 10 establishes the core generic durable workflow execution engine. Th
 
 ```
 Versioned Fixed Template (in code)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
     Workflow (PENDING)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
  WorkflowStep instances (PENDING)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
   WorkflowCoordinator (Reconciliation Tick)
   - Evaluates DAG dependencies
   - Evaluates safe conditions
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
    WorkflowStep (READY)
-           ©¦
+           â”‚
    (Atomic Tx: ON CONFLICT DO NOTHING)
-           ¨‹
+           â–¼
    Durable Job (QUEUED, type: WORKFLOW_STEP)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
    JobScanner / Redis Streams Dispatch (Day 6)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
    Worker Claim & Leases (Day 7-9)
-           ©¦
-           ¨‹
+           â”‚
+           â–¼
  WorkflowStepExecutor (Worker)
   - Tenant safety validation
   - Terminal workflow fence
   - Step start fence: READY -> RUNNING
   - Step handler execution
-           ©¦
-     ©°©¤©¤©¤©¤©¤©Ø©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-     ¨‹                               ¨‹
+           â”‚
+     â”Œâ”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â–¼                               â–¼
 Success:                        Failure:
 WorkflowStep: SUCCEEDED         - Retryable: Step stays RUNNING,
 Output persisted                  Job RETRY_WAITING (Day 8 backoff)
@@ -167,3 +167,5 @@ The engine includes four infrastructure-only test templates in `@reloop/workflow
 2. `SYSTEM_PARALLEL_JOIN_V1`: `STEP_A -> (STEP_B, STEP_C) in parallel -> STEP_D` (synchronization barrier)
 3. `SYSTEM_CONDITIONAL_V1`: `STEP_A -> STEP_B (conditional) -> STEP_C`
 4. `SYSTEM_RETRY_V1`: `STEP_A` (transient failure on attempt 1, success on attempt 2)
+
+5. SYSTEM_APPROVAL_V1: STEP_CHECK -> STEP_APPROVAL (HITL Pause) -> STEP_EXECUTE -> STEP_VERIFY (See [Approval Engine Documentation](./approval-engine.md))

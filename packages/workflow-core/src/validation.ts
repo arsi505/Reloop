@@ -1,4 +1,4 @@
-import { WorkflowTemplate, WorkflowStepDefinition } from './types';
+﻿import { WorkflowTemplate, WorkflowStepDefinition, RecoveryPreview } from './types';
 
 export class WorkflowTemplateValidationError extends Error {
   constructor(message: string) {
@@ -49,8 +49,27 @@ export function validateWorkflowTemplate(template: WorkflowTemplate): void {
       throw new WorkflowTemplateValidationError(`Step "${step.key}" must have a non-empty name.`);
     }
 
-    if (!step.handlerKey || typeof step.handlerKey !== 'string' || step.handlerKey.trim().length === 0) {
-      throw new WorkflowTemplateValidationError(`Step "${step.key}" must have a non-empty handlerKey.`);
+    const stepType = step.type ?? 'EXECUTION';
+    if (stepType !== 'EXECUTION' && stepType !== 'APPROVAL') {
+      throw new WorkflowTemplateValidationError(
+        `Step "${step.key}" has invalid type "${stepType}". Must be "EXECUTION" or "APPROVAL".`,
+      );
+    }
+
+    if (stepType === 'EXECUTION') {
+      if (!step.handlerKey || typeof step.handlerKey !== 'string' || step.handlerKey.trim().length === 0) {
+        throw new WorkflowTemplateValidationError(`Execution step "${step.key}" must have a non-empty handlerKey.`);
+      }
+    } else if (stepType === 'APPROVAL') {
+      if (step.preview) {
+        try {
+          validateRecoveryPreview(step.preview);
+        } catch (err: any) {
+          throw new WorkflowTemplateValidationError(
+            `Approval step "${step.key}" has invalid preview: ${err.message}`,
+          );
+        }
+      }
     }
 
     if (step.maxAttempts !== undefined) {
@@ -179,6 +198,97 @@ function detectCycles(steps: WorkflowStepDefinition[]): void {
   for (const step of steps) {
     if (visited.get(step.key) === 0) {
       dfs(step.key, []);
+    }
+  }
+}
+
+const MAX_STRING_LENGTH = 10000;
+const MAX_ITEM_LENGTH = 2000;
+const MAX_ARRAY_LENGTH = 100;
+
+/**
+ * Validates a structured Recovery Preview contract.
+ * Throws WorkflowTemplateValidationError if the contract is violated.
+ */
+export function validateRecoveryPreview(preview: RecoveryPreview): void {
+  if (!preview || typeof preview !== 'object' || Array.isArray(preview)) {
+    throw new WorkflowTemplateValidationError('RecoveryPreview must be a non-null object.');
+  }
+
+  if (preview.version !== 1) {
+    throw new WorkflowTemplateValidationError(
+      `RecoveryPreview version must be 1, received: ${(preview as any).version}.`,
+    );
+  }
+
+  const requiredStringFields: (keyof RecoveryPreview)[] = ['problem', 'proposedAction', 'why'];
+  for (const field of requiredStringFields) {
+    const val = preview[field];
+    if (typeof val !== 'string' || val.trim().length === 0) {
+      throw new WorkflowTemplateValidationError(
+        `RecoveryPreview "${field}" must be a non-empty string.`,
+      );
+    }
+    if (val.length > MAX_STRING_LENGTH) {
+      throw new WorkflowTemplateValidationError(
+        `RecoveryPreview "${field}" exceeds max length of ${MAX_STRING_LENGTH} characters.`,
+      );
+    }
+  }
+
+  const requiredArrayFields: (keyof RecoveryPreview)[] = [
+    'safetyChecks',
+    'changes',
+    'nonChanges',
+    'systems',
+    'risks',
+  ];
+  for (const field of requiredArrayFields) {
+    const arr = preview[field];
+    if (!Array.isArray(arr)) {
+      throw new WorkflowTemplateValidationError(
+        `RecoveryPreview "${field}" must be an array of strings.`,
+      );
+    }
+    if (arr.length > MAX_ARRAY_LENGTH) {
+      throw new WorkflowTemplateValidationError(
+        `RecoveryPreview "${field}" exceeds maximum array length of ${MAX_ARRAY_LENGTH}.`,
+      );
+    }
+    for (let i = 0; i < arr.length; i++) {
+      const item = arr[i];
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        throw new WorkflowTemplateValidationError(
+          `RecoveryPreview "${field}[${i}]" must be a non-empty string.`,
+        );
+      }
+      if (item.length > MAX_ITEM_LENGTH) {
+        throw new WorkflowTemplateValidationError(
+          `RecoveryPreview "${field}[${i}]" exceeds max item length of ${MAX_ITEM_LENGTH} characters.`,
+        );
+      }
+    }
+  }
+
+  const optionalStringFields: (keyof RecoveryPreview)[] = [
+    'recoveryLevel',
+    'caseReference',
+    'orderReference',
+    'expectedVerification',
+  ];
+  for (const field of optionalStringFields) {
+    const val = preview[field];
+    if (val !== undefined && val !== null) {
+      if (typeof val !== 'string') {
+        throw new WorkflowTemplateValidationError(
+          `RecoveryPreview "${field}" must be a string if provided.`,
+        );
+      }
+      if (val.length > MAX_ITEM_LENGTH) {
+        throw new WorkflowTemplateValidationError(
+          `RecoveryPreview "${field}" exceeds max length of ${MAX_ITEM_LENGTH} characters.`,
+        );
+      }
     }
   }
 }

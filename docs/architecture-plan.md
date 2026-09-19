@@ -50,28 +50,24 @@ The repository will be structured as a modular TypeScript monorepo:
 ```
 Reloop/
 ├── apps/
-│   ├── web/                     # Next.js web application (Dashboard, Exception Inbox, Previews)
-│   ├── api/                     # NestJS core backend API & Webhook Ingestion
-│   ├── scheduler/               # Scheduled cron engine (reconciliation pollers, heartbeat sweeps)
-│   └── worker/                  # Background worker daemon consuming recovery execution jobs
-│
-├── packages/
-│   ├── database/                # Prisma schema, client, migrations, and database seeders
-│   ├── contracts/               # Shared TypeScript DTOs, API contracts, and event schemas
-│   ├── workflow-core/           # Recovery state machines, verification logic, and safety rules
-│   └── integration-sdk/         # Connector interfaces, rate-limiters, and normalized order models
-│
-├── connectors/
-│   ├── simulator/               # Mock 3PL and carrier simulator for robust local development & testing
-│   ├── shopify/                 # Shopify Admin GraphQL/REST connector
-│   ├── shipstation/             # ShipStation v1/v2 REST connector
-│   └── generic-3pl/             # Standardized REST/Webhook connector for 3PL warehouse systems
-│
-├── docker/
-│   ├── docker-compose.yml       # Local development services (Postgres, Redis, app services)
-│   └── Dockerfile.*             # Individual production container definitions
-│
-├── docs/                        # Specifications, UX journeys, design system, architecture plans
+�?  ├── web/                     # Next.js web application (Dashboard, Exception Inbox, Previews)
+�?  ├── api/                     # NestJS core backend API & Webhook Ingestion
+�?  ├── scheduler/               # Scheduled cron engine (reconciliation pollers, heartbeat sweeps)
+�?  └── worker/                  # Background worker daemon consuming recovery execution jobs
+�?├── packages/
+�?  ├── database/                # Prisma schema, client, migrations, and database seeders
+�?  ├── contracts/               # Shared TypeScript DTOs, API contracts, and event schemas
+�?  ├── workflow-core/           # Recovery state machines, verification logic, and safety rules
+�?  └── integration-sdk/         # Connector interfaces, rate-limiters, and normalized order models
+�?├── connectors/
+�?  ├── simulator/               # Mock 3PL and carrier simulator for robust local development & testing
+�?  ├── shopify/                 # Shopify Admin GraphQL/REST connector
+�?  ├── shipstation/             # ShipStation v1/v2 REST connector
+�?  └── generic-3pl/             # Standardized REST/Webhook connector for 3PL warehouse systems
+�?├── docker/
+�?  ├── docker-compose.yml       # Local development services (Postgres, Redis, app services)
+�?  └── Dockerfile.*             # Individual production container definitions
+�?├── docs/                        # Specifications, UX journeys, design system, architecture plans
 ├── .gitignore                   # Repository ignore specifications
 ├── LICENSE                      # MIT License
 └── README.md                    # Project overview and status
@@ -88,30 +84,15 @@ Reloop/
 
 ### Recovery Execution Flow
 ```
-[Event Trigger] ────────► [Ingestion / Poller]
-                                │
-                                ▼
-                       [Exception Created]
-                                │
-        ┌───────────────────────┴───────────────────────┐
-        ▼                                               ▼
-[AUTO_RECOVER / INVESTIGATE]                  [REQUIRE_APPROVAL / BLOCK]
+[Event Trigger] ────────�?[Ingestion / Poller]
+                                �?                                �?                       [Exception Created]
+                                �?        ┌───────────────────────┴───────────────────────�?        �?                                              �?[AUTO_RECOVER / INVESTIGATE]                  [REQUIRE_APPROVAL / BLOCK]
 Queued to Redis Stream worker                 UI shows Recovery Preview
-        │                                               │
-        ▼                                               ▼
-[Execute Idempotent Payload]                  [Human Operator Approves]
-        │                                               │
-        └───────────────────────┬───────────────────────┘
-                                │
-                                ▼
-                     [State: VERIFYING]
-                                │
-                     (Independent GET query
+        �?                                              �?        �?                                              �?[Execute Idempotent Payload]                  [Human Operator Approves]
+        �?                                              �?        └───────────────────────┬───────────────────────�?                                �?                                �?                     [State: VERIFYING]
+                                �?                     (Independent GET query
                       across both platforms)
-                                │
-               ┌────────────────┴────────────────┐
-               ▼                                 ▼
-       [State Converged]                 [State Divergent]
+                                �?               ┌────────────────┴────────────────�?               �?                                �?       [State Converged]                 [State Divergent]
       State -> RESOLVED                   Retry / Escalate
 ```
 
@@ -155,3 +136,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Durable Step Execution**: Each workflow step corresponds to exactly one durable PostgreSQL `Job` (`type = 'WORKFLOW_STEP'`). Retries reuse the same Job and same `WorkflowStep`, tracking attempts via `JobAttempt`.
 - **Workflow Coordinator**: Background poller in `apps/scheduler` that evaluates DAG completion, reconciles step job states, evaluates safe declarative conditions, atomicity via `ON CONFLICT DO NOTHING`, and progresses workflow state.
 - **Worker Execution & Fencing**: `WorkflowStepExecutor` in `apps/worker` enforces tenant isolation, terminal workflow execution fences, and safe step state transitions (`READY -> RUNNING -> SUCCEEDED / FAILED`). See [workflow-engine.md](./workflow-engine.md).
+
+---
+
+## 9. Human Approval / HITL & Recovery Preview
+
+- **Human-in-the-Loop (HITL) Execution**: Workflows support non-job \APPROVAL\ steps that halt automated progression and transition workflow and step to \WAITING\ status.
+- **Zero-Job Invariant**: Approval steps NEVER create a PostgreSQL \Job\ or Redis Stream dispatch. They function strictly as database-orchestrated gates.
+- **Immutable Preview Snapshot**: Paused approval steps persist a frozen \RecoveryPreview\ JSON snapshot in \Approval.previewSnapshot\ explaining the problem, proposed action, changes, non-changes, risks, and verification criteria.
+- **Optimistic Fenced CAS**: Approval decisions (\APPROVED\ or \REJECTED\) execute in an atomic transaction with row locks (\SELECT FOR UPDATE\) asserting current \WAITING\ and \PENDING\ states, preventing concurrent decision races and stale revival of terminal workflows.
+- **Atomic Audit Trail**: \APPROVAL_APPROVED\ or \APPROVAL_REJECTED\ audit events are persisted in the exact same transaction as the approval decision. See [approval-engine.md](./approval-engine.md).

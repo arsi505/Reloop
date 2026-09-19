@@ -511,6 +511,7 @@ model Approval {
   decidedByUserId   String?        @map("decided_by_user_id") @db.Uuid
   status            ApprovalStatus @default(PENDING)
   reason            String?
+  previewSnapshot   Json?          @map("preview_snapshot")
   requestedAt       DateTime       @default(now()) @map("requested_at")
   decidedAt         DateTime?      @map("decided_at")
   expiresAt         DateTime?      @map("expires_at")
@@ -524,6 +525,7 @@ model Approval {
   requestedByUser   User?          @relation("RequestedApprovals", fields: [requestedByUserId], references: [id], onDelete: SetNull)
   decidedByUser     User?          @relation("DecidedApprovals", fields: [decidedByUserId], references: [id], onDelete: SetNull)
 
+  @@unique([workflowStepId])
   @@index([organizationId, status])
   @@index([recoveryCaseId])
   @@index([workflowId])

@@ -1,4 +1,4 @@
-import {
+﻿import {
   PrismaClient,
   Prisma,
   Workflow,
@@ -7,6 +7,8 @@ import {
   WorkflowStepStatus,
   JobStatus,
   Job,
+  ApprovalStatus,
+  Approval,
 } from '@prisma/client';
 import { WorkflowTemplateRegistry, evaluateCondition } from '@reloop/workflow-core';
 import { SchedulerConfig } from './config';
@@ -35,7 +37,7 @@ export interface WorkflowCoordinatorTickResult {
   errors: number;
 }
 
-type StepWithJobs = WorkflowStep & { jobs: Job[] };
+type StepWithJobsAndApprovals = WorkflowStep & { jobs: Job[]; approvals: Approval[] };
 
 export class WorkflowCoordinator {
   private prisma: PrismaClient;
@@ -142,10 +144,10 @@ export class WorkflowCoordinator {
     };
 
     try {
-      // 1. Fetch active workflows: PENDING or RUNNING
+      // 1. Fetch active workflows: PENDING, RUNNING, or WAITING
       const workflows = await this.prisma.workflow.findMany({
         where: {
-          status: { in: [WorkflowStatus.PENDING, WorkflowStatus.RUNNING] },
+          status: { in: [WorkflowStatus.PENDING, WorkflowStatus.RUNNING, WorkflowStatus.WAITING] },
         },
         orderBy: { createdAt: 'asc' },
         take: this.scanBatchSize,
@@ -206,19 +208,20 @@ export class WorkflowCoordinator {
       return;
     }
 
-    // 2. Load all WorkflowSteps with their linked Jobs
-    const steps: StepWithJobs[] = await this.prisma.workflowStep.findMany({
+    // 2. Load all WorkflowSteps with their linked Jobs and Approvals
+    const steps: StepWithJobsAndApprovals[] = await this.prisma.workflowStep.findMany({
       where: {
         workflowId: workflow.id,
         organizationId: workflow.organizationId,
       },
       include: {
         jobs: true,
+        approvals: true,
       },
       orderBy: { position: 'asc' },
     });
 
-    const stepMap = new Map<string, StepWithJobs>();
+    const stepMap = new Map<string, StepWithJobsAndApprovals>();
     for (const step of steps) {
       stepMap.set(step.key, step);
     }
@@ -286,6 +289,48 @@ export class WorkflowCoordinator {
           step.status = WorkflowStepStatus.RUNNING;
         }
       }
+
+      // Reconcile WAITING approval steps
+      if (step.status === WorkflowStepStatus.WAITING && step.approvals && step.approvals.length > 0) {
+        const approval = step.approvals[0];
+        if (approval.status === ApprovalStatus.APPROVED) {
+          await this.prisma.workflowStep.update({
+            where: { id: step.id },
+            data: {
+              status: WorkflowStepStatus.SUCCEEDED,
+              completedAt: approval.decidedAt ?? new Date(),
+            },
+          });
+          step.status = WorkflowStepStatus.SUCCEEDED;
+          if (workflow.status === WorkflowStatus.WAITING) {
+            await this.prisma.workflow.update({
+              where: { id: workflow.id },
+              data: {
+                status: WorkflowStatus.RUNNING,
+              },
+            });
+            workflow.status = WorkflowStatus.RUNNING;
+          }
+        } else if (approval.status === ApprovalStatus.REJECTED) {
+          await this.prisma.workflowStep.update({
+            where: { id: step.id },
+            data: {
+              status: WorkflowStepStatus.BLOCKED,
+              completedAt: approval.decidedAt ?? new Date(),
+            },
+          });
+          step.status = WorkflowStepStatus.BLOCKED;
+          await this.prisma.workflow.update({
+            where: { id: workflow.id },
+            data: {
+              status: WorkflowStatus.BLOCKED,
+            },
+          });
+          workflow.status = WorkflowStatus.BLOCKED;
+          result.blockedWorkflows++;
+          return;
+        }
+      }
     }
 
     // 4. Check for workflow-level terminal states (Failure or Blocked propagation)
@@ -332,8 +377,12 @@ export class WorkflowCoordinator {
       if (!stepRow) continue;
 
       // Handle repairing orphaned READY steps (READY in DB but Job was never inserted)
-      if (stepRow.status === WorkflowStepStatus.READY && (!stepRow.jobs || stepRow.jobs.length === 0)) {
-        await this.createJobForReadyStep(workflow, stepRow, stepDef);
+      if (
+        stepRow.status === WorkflowStepStatus.READY &&
+        stepDef.type !== 'APPROVAL' &&
+        (!stepRow.jobs || stepRow.jobs.length === 0)
+      ) {
+        await this.createJobForReadyStep(workflow, stepRow, stepDef as any);
         result.createdJobs++;
         continue;
       }
@@ -395,8 +444,17 @@ export class WorkflowCoordinator {
         continue;
       }
 
+      if (stepDef.type === 'APPROVAL') {
+        // Pauses step in WAITING and creates Approval record idempotently (0 jobs created)
+        await this.pauseStepForApproval(workflow, stepRow, stepDef);
+        stepRow.status = WorkflowStepStatus.WAITING;
+        workflow.status = WorkflowStatus.WAITING;
+        newlyActivated = true;
+        continue;
+      }
+
       // Condition satisfied: Step transitions PENDING -> READY and Job is created atomically
-      await this.readyStepAndCreateJob(workflow, stepRow, stepDef);
+      await this.readyStepAndCreateJob(workflow, stepRow, stepDef as any);
       stepRow.status = WorkflowStepStatus.READY;
       result.readiedSteps++;
       result.createdJobs++;
@@ -438,6 +496,7 @@ export class WorkflowCoordinator {
           startedAt: workflow.startedAt ?? new Date(),
         },
       });
+      workflow.status = WorkflowStatus.RUNNING;
     }
   }
 
@@ -555,5 +614,63 @@ export class WorkflowCoordinator {
       )
       ON CONFLICT (organization_id, idempotency_key) DO NOTHING
     `;
+  }
+
+  /**
+   * Atomically pauses WorkflowStep in WAITING and creates durable Approval record.
+   * Creates ZERO jobs. Uses ON CONFLICT (workflow_step_id) DO NOTHING for multi-coordinator race safety.
+   */
+  private async pauseStepForApproval(
+    workflow: Workflow,
+    step: WorkflowStep,
+    stepDef: { key: string; preview?: any },
+  ): Promise<void> {
+    const previewJson = stepDef.preview ? JSON.stringify(stepDef.preview) : null;
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Insert Approval row idempotently
+      await tx.$executeRaw`
+        INSERT INTO approvals (
+          id,
+          organization_id,
+          recovery_case_id,
+          workflow_id,
+          workflow_step_id,
+          status,
+          preview_snapshot,
+          requested_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          gen_random_uuid(),
+          ${workflow.organizationId}::uuid,
+          ${workflow.recoveryCaseId}::uuid,
+          ${workflow.id}::uuid,
+          ${step.id}::uuid,
+          'PENDING'::"ApprovalStatus",
+          ${previewJson}::jsonb,
+          NOW(),
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (workflow_step_id) DO NOTHING
+      `;
+
+      // 2. Mark WorkflowStep as WAITING
+      await tx.workflowStep.update({
+        where: { id: step.id },
+        data: { status: WorkflowStepStatus.WAITING },
+      });
+
+      // 3. Mark Workflow as WAITING
+      await tx.workflow.update({
+        where: { id: workflow.id },
+        data: {
+          status: WorkflowStatus.WAITING,
+          startedAt: workflow.startedAt ?? new Date(),
+        },
+      });
+    });
   }
 }

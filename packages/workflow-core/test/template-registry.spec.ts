@@ -1,6 +1,7 @@
-import {
+﻿import {
   WorkflowTemplateRegistry,
   validateWorkflowTemplate,
+  validateRecoveryPreview,
   WorkflowTemplateValidationError,
   evaluateCondition,
   registerSystemTemplates,
@@ -8,6 +9,7 @@ import {
   SYSTEM_PARALLEL_JOIN_V1,
   SYSTEM_CONDITIONAL_V1,
   SYSTEM_RETRY_V1,
+  SYSTEM_APPROVAL_V1,
   WorkflowTemplate,
 } from '../src';
 
@@ -26,9 +28,10 @@ describe('WorkflowTemplateRegistry & DAG Validation', () => {
       expect(registry.has('SYSTEM_PARALLEL_JOIN', 1)).toBe(true);
       expect(registry.has('SYSTEM_CONDITIONAL', 1)).toBe(true);
       expect(registry.has('SYSTEM_RETRY', 1)).toBe(true);
+      expect(registry.has('SYSTEM_APPROVAL', 1)).toBe(true);
 
       const all = registry.getAll();
-      expect(all).toHaveLength(4);
+      expect(all).toHaveLength(5);
     });
 
     it('retrieves registered templates by key and version', () => {
@@ -456,6 +459,172 @@ describe('WorkflowTemplateRegistry & DAG Validation', () => {
           { STEP_A: { other: 123 } },
         ),
       ).toBe(false);
+    });
+  });
+
+  describe('Approval Step & Recovery Preview Validation', () => {
+    const validPreview = {
+      version: 1 as const,
+      problem: 'Order packaging error',
+      proposedAction: 'Reship with express carrier',
+      why: 'Original shipment returned by carrier',
+      safetyChecks: ['Check inventory availability', 'Confirm address'],
+      changes: ['Create new fulfillment shipment'],
+      nonChanges: ['Do not refund credit card'],
+      systems: ['Shopify', 'ShipStation'],
+      risks: ['Carrier delay during holiday season'],
+      recoveryLevel: 'L2',
+      caseReference: 'CASE-001',
+      orderReference: 'ORD-123',
+      expectedVerification: 'Tracking active in 10 mins',
+    };
+
+    it('accepts an APPROVAL step without handlerKey and with valid preview', () => {
+      expect(() => {
+        validateWorkflowTemplate({
+          key: 'VALID_APPROVAL',
+          version: 1,
+          name: 'Valid Approval',
+          steps: [
+            {
+              key: 'STEP_APPROVAL',
+              name: 'Approval Step',
+              type: 'APPROVAL',
+              preview: validPreview,
+            },
+          ],
+        });
+      }).not.toThrow();
+    });
+
+    it('accepts an APPROVAL step without preview', () => {
+      expect(() => {
+        validateWorkflowTemplate({
+          key: 'VALID_APPROVAL_NO_PREVIEW',
+          version: 1,
+          name: 'Valid Approval No Preview',
+          steps: [
+            {
+              key: 'STEP_APPROVAL',
+              name: 'Approval Step',
+              type: 'APPROVAL',
+            },
+          ],
+        });
+      }).not.toThrow();
+    });
+
+    it('rejects an EXECUTION step when handlerKey is missing or empty', () => {
+      expect(() => {
+        validateWorkflowTemplate({
+          key: 'INVALID_EXECUTION',
+          version: 1,
+          name: 'Invalid Execution',
+          steps: [
+            {
+              key: 'STEP_1',
+              name: 'Step 1',
+              type: 'EXECUTION',
+            } as any,
+          ],
+        });
+      }).toThrow(/must have a non-empty handlerKey/);
+
+      expect(() => {
+        validateWorkflowTemplate({
+          key: 'INVALID_EXECUTION_EMPTY',
+          version: 1,
+          name: 'Invalid Execution Empty',
+          steps: [
+            {
+              key: 'STEP_1',
+              name: 'Step 1',
+              type: 'EXECUTION',
+              handlerKey: '   ',
+            },
+          ],
+        });
+      }).toThrow(/must have a non-empty handlerKey/);
+    });
+
+    it('rejects an unknown step type', () => {
+      expect(() => {
+        validateWorkflowTemplate({
+          key: 'INVALID_TYPE',
+          version: 1,
+          name: 'Invalid Type',
+          steps: [
+            {
+              key: 'STEP_1',
+              name: 'Step 1',
+              type: 'UNKNOWN' as any,
+              handlerKey: 'NOOP',
+            },
+          ],
+        });
+      }).toThrow(/has invalid type "UNKNOWN"/);
+    });
+
+    it('validates RecoveryPreview requires non-null object', () => {
+      expect(() => validateRecoveryPreview(null as any)).toThrow(/must be a non-null object/);
+      expect(() => validateRecoveryPreview([] as any)).toThrow(/must be a non-null object/);
+      expect(() => validateRecoveryPreview('string' as any)).toThrow(/must be a non-null object/);
+    });
+
+    it('validates RecoveryPreview version must be 1', () => {
+      expect(() => validateRecoveryPreview({ ...validPreview, version: 2 as any })).toThrow(
+        /version must be 1/,
+      );
+    });
+
+    it('validates RecoveryPreview string fields must be non-empty', () => {
+      expect(() => validateRecoveryPreview({ ...validPreview, problem: '' })).toThrow(
+        /RecoveryPreview "problem" must be a non-empty string/,
+      );
+      expect(() => validateRecoveryPreview({ ...validPreview, proposedAction: '   ' })).toThrow(
+        /RecoveryPreview "proposedAction" must be a non-empty string/,
+      );
+      expect(() => validateRecoveryPreview({ ...validPreview, why: undefined as any })).toThrow(
+        /RecoveryPreview "why" must be a non-empty string/,
+      );
+    });
+
+    it('validates RecoveryPreview array fields must be string arrays with non-empty items', () => {
+      expect(() => validateRecoveryPreview({ ...validPreview, safetyChecks: 'not-an-array' as any })).toThrow(
+        /RecoveryPreview "safetyChecks" must be an array of strings/,
+      );
+      expect(() => validateRecoveryPreview({ ...validPreview, safetyChecks: ['valid', ''] })).toThrow(
+        /RecoveryPreview "safetyChecks\[1\]" must be a non-empty string/,
+      );
+      expect(() => validateRecoveryPreview({ ...validPreview, systems: [123 as any] })).toThrow(
+        /RecoveryPreview "systems\[0\]" must be a non-empty string/,
+      );
+    });
+
+    it('validates RecoveryPreview deep freezes inside registry', () => {
+      const template: WorkflowTemplate = {
+        key: 'PREVIEW_FREEZE_TEST',
+        version: 1,
+        name: 'Preview Freeze Test',
+        steps: [
+          {
+            key: 'APPROVAL_STEP',
+            name: 'Approval Step',
+            type: 'APPROVAL',
+            preview: { ...validPreview, safetyChecks: ['Check 1', 'Check 2'] },
+          },
+        ],
+      };
+
+      registry.register(template);
+      const retrieved = registry.get('PREVIEW_FREEZE_TEST', 1)!;
+      expect(retrieved.steps[0].preview).toBeDefined();
+      expect(Object.isFrozen(retrieved.steps[0].preview)).toBe(true);
+      expect(Object.isFrozen(retrieved.steps[0].preview?.safetyChecks)).toBe(true);
+
+      // Modifying caller's preview does not affect registry
+      (template.steps[0].preview!.safetyChecks as string[]).push('Hacked Check');
+      expect(retrieved.steps[0].preview?.safetyChecks).toHaveLength(2);
     });
   });
 });

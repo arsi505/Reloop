@@ -1,10 +1,11 @@
-import * as dotenv from 'dotenv';
+﻿import * as dotenv from 'dotenv';
 import * as path from 'path';
 import {
   PrismaClient,
   WorkflowStatus,
   WorkflowStepStatus,
   JobStatus,
+  ApprovalStatus,
   RecoveryCaseType,
   RecoveryLevel,
   RecoveryCaseStatus,
@@ -16,6 +17,7 @@ import {
   SYSTEM_PARALLEL_JOIN_V1,
   SYSTEM_CONDITIONAL_V1,
   SYSTEM_RETRY_V1,
+  SYSTEM_APPROVAL_V1,
 } from '@reloop/workflow-core';
 import { WorkflowCoordinator } from '../src/workflow-coordinator';
 import { WorkflowCreationService } from '../src/workflow-creator';
@@ -765,6 +767,336 @@ describe('Day 10: Workflow Coordination Engine', () => {
 
       const wf = await prisma.workflow.findUnique({ where: { id: instance.id } });
       expect(wf?.status).not.toBe(WorkflowStatus.SUCCEEDED);
+    });
+  });
+
+  describe('Human-in-the-Loop Approval Workflow (SYSTEM_APPROVAL_V1)', () => {
+    it('pauses workflow in WAITING and creates Approval record with previewSnapshot when approval step readied, creating ZERO jobs for approval step', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      // Tick 1: Step 1 (STEP_CHECK) readies and creates Job
+      const tick1 = await coordinator.tick();
+      expect(tick1.readiedSteps).toBe(1);
+      expect(tick1.createdJobs).toBe(1);
+
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      expect(stepCheck?.status).toBe(WorkflowStepStatus.READY);
+      expect(stepCheck?.jobs).toHaveLength(1);
+
+      // Complete STEP_CHECK Job
+      const checkJob = stepCheck!.jobs[0];
+      await prisma.job.update({
+        where: { id: checkJob.id },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
+      });
+
+      // Tick 2: Reconciles STEP_CHECK to SUCCEEDED; readies STEP_APPROVAL
+      const tick2 = await coordinator.tick();
+      expect(tick2.createdJobs).toBe(0); // ZERO jobs created for approval step!
+
+      const stepApproval = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+        include: { jobs: true, approvals: true },
+      });
+
+      // Step and Workflow are both in WAITING
+      expect(stepApproval?.status).toBe(WorkflowStepStatus.WAITING);
+      expect(stepApproval?.jobs).toHaveLength(0); // Durable proof: ZERO jobs created
+      expect(stepApproval?.approvals).toHaveLength(1);
+
+      const wf = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wf?.status).toBe(WorkflowStatus.WAITING);
+
+      // Verify immutable Approval record snapshot
+      const approvalRecord = stepApproval!.approvals[0];
+      expect(approvalRecord.status).toBe(ApprovalStatus.PENDING);
+      expect(approvalRecord.organizationId).toBe(testOrgId);
+      expect(approvalRecord.recoveryCaseId).toBe(testRecoveryCaseId);
+      expect(approvalRecord.workflowId).toBe(instance.id);
+      expect(approvalRecord.workflowStepId).toBe(stepApproval!.id);
+      expect(approvalRecord.previewSnapshot).toBeDefined();
+
+      const snapshot = approvalRecord.previewSnapshot as any;
+      expect(snapshot.version).toBe(1);
+      expect(snapshot.problem).toContain('carrier delivery exception');
+      expect(snapshot.proposedAction).toContain('replacement shipment');
+      expect(snapshot.safetyChecks).toBeInstanceOf(Array);
+      expect(snapshot.changes).toBeInstanceOf(Array);
+    });
+
+    it('multi-coordinator idempotency: subsequent ticks do not duplicate Approval or create jobs', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      await coordinator.tick();
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      await prisma.job.update({
+        where: { id: stepCheck!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // First tick creates approval
+      await coordinator.tick();
+
+      // Subsequent ticks should be idempotent no-ops
+      for (let i = 0; i < 3; i++) {
+        const tick = await coordinator.tick();
+        expect(tick.createdJobs).toBe(0);
+      }
+
+      const stepApproval = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+        include: { jobs: true, approvals: true },
+      });
+      expect(stepApproval?.status).toBe(WorkflowStepStatus.WAITING);
+      expect(stepApproval?.approvals).toHaveLength(1);
+      expect(stepApproval?.jobs).toHaveLength(0);
+
+      const wf = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wf?.status).toBe(WorkflowStatus.WAITING);
+    });
+
+    it('coordinator restart safety: fresh coordinator preserves WAITING state', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      await coordinator.tick();
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      await prisma.job.update({
+        where: { id: stepCheck!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+      await coordinator.tick();
+
+      // Simulate coordinator restart by instantiating a fresh coordinator
+      const freshCoordinator = new WorkflowCoordinator(prisma, templateRegistry, {
+        workflowScanIntervalMs: 50,
+      });
+
+      const tick = await freshCoordinator.tick();
+      expect(tick.createdJobs).toBe(0);
+
+      const wf = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wf?.status).toBe(WorkflowStatus.WAITING);
+    });
+
+    it('approved decision unlocks downstream STEP_EXECUTE and completes full workflow', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      // 1. Run STEP_CHECK
+      await coordinator.tick();
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      await prisma.job.update({
+        where: { id: stepCheck!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // 2. Step pauses in WAITING
+      await coordinator.tick();
+      const stepApproval = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+        include: { approvals: true },
+      });
+      const approval = stepApproval!.approvals[0];
+
+      // 3. Human decision: APPROVE
+      await prisma.approval.update({
+        where: { id: approval.id },
+        data: {
+          status: ApprovalStatus.APPROVED,
+          decidedAt: new Date(),
+        },
+      });
+
+      // 4. Coordinator tick reconciles APPROVED: STEP_APPROVAL -> SUCCEEDED, Workflow -> RUNNING, STEP_EXECUTE -> READY (job created)
+      const tickApproved = await coordinator.tick();
+      expect(tickApproved.readiedSteps).toBe(1); // STEP_EXECUTE readied
+      expect(tickApproved.createdJobs).toBe(1); // STEP_EXECUTE Job created
+
+      const stepExecute = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_EXECUTE' } },
+        include: { jobs: true },
+      });
+      expect(stepExecute?.status).toBe(WorkflowStepStatus.READY);
+      expect(stepExecute?.jobs).toHaveLength(1);
+
+      const wfRunning = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wfRunning?.status).toBe(WorkflowStatus.RUNNING);
+
+      // 5. Complete STEP_EXECUTE Job
+      await prisma.job.update({
+        where: { id: stepExecute!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // 6. Coordinator tick readies STEP_VERIFY
+      const tickVerify = await coordinator.tick();
+      expect(tickVerify.readiedSteps).toBe(1);
+      expect(tickVerify.createdJobs).toBe(1);
+
+      const stepVerify = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_VERIFY' } },
+        include: { jobs: true },
+      });
+      expect(stepVerify?.status).toBe(WorkflowStepStatus.READY);
+
+      // 7. Complete STEP_VERIFY Job
+      await prisma.job.update({
+        where: { id: stepVerify!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // 8. Coordinator tick completes workflow
+      const tickFinal = await coordinator.tick();
+      expect(tickFinal.completedWorkflows).toBe(1);
+
+      const wfCompleted = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wfCompleted?.status).toBe(WorkflowStatus.SUCCEEDED);
+    });
+
+    it('rejected decision blocks workflow and creates zero downstream jobs', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      // 1. Run STEP_CHECK
+      await coordinator.tick();
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      await prisma.job.update({
+        where: { id: stepCheck!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // 2. Step pauses in WAITING
+      await coordinator.tick();
+      const stepApproval = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+        include: { approvals: true },
+      });
+      const approval = stepApproval!.approvals[0];
+
+      // 3. Human decision: REJECT
+      await prisma.approval.update({
+        where: { id: approval.id },
+        data: {
+          status: ApprovalStatus.REJECTED,
+          reason: 'Manual inspection failed safety threshold',
+          decidedAt: new Date(),
+        },
+      });
+
+      // 4. Coordinator tick reconciles REJECTED
+      const tickRejected = await coordinator.tick();
+      expect(tickRejected.blockedWorkflows).toBe(1);
+      expect(tickRejected.createdJobs).toBe(0);
+
+      const stepApprovalBlocked = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+      });
+      expect(stepApprovalBlocked?.status).toBe(WorkflowStepStatus.BLOCKED);
+
+      const wfBlocked = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wfBlocked?.status).toBe(WorkflowStatus.BLOCKED);
+
+      // 5. Verify zero downstream jobs created
+      const stepExecute = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_EXECUTE' } },
+        include: { jobs: true },
+      });
+      expect(stepExecute?.status).toBe(WorkflowStepStatus.PENDING);
+      expect(stepExecute?.jobs).toHaveLength(0);
+
+      const stepVerify = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_VERIFY' } },
+        include: { jobs: true },
+      });
+      expect(stepVerify?.status).toBe(WorkflowStepStatus.PENDING);
+      expect(stepVerify?.jobs).toHaveLength(0);
+    });
+
+    it('expired approval leaves step and workflow in WAITING, creating zero jobs', async () => {
+      const instance = await createWorkflow({
+        templateKey: 'SYSTEM_APPROVAL',
+        templateVersion: 1,
+      });
+
+      // 1. Run STEP_CHECK to success
+      await coordinator.tick();
+      const stepCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_CHECK' } },
+        include: { jobs: true },
+      });
+      await prisma.job.update({
+        where: { id: stepCheck!.jobs[0].id },
+        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+      });
+
+      // 2. Pause in WAITING
+      await coordinator.tick();
+      const stepApproval = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+        include: { approvals: true },
+      });
+      const approval = stepApproval!.approvals[0];
+
+      // 3. Mark approval EXPIRED
+      await prisma.approval.update({
+        where: { id: approval.id },
+        data: {
+          status: ApprovalStatus.EXPIRED,
+          expiresAt: new Date(Date.now() - 1000),
+        },
+      });
+
+      // 4. Coordinator tick
+      const tickExpired = await coordinator.tick();
+      expect(tickExpired.createdJobs).toBe(0);
+
+      // 5. Verify step and workflow remain in WAITING and no jobs created
+      const stepApprovalCheck = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
+      });
+      expect(stepApprovalCheck?.status).toBe(WorkflowStepStatus.WAITING);
+
+      const wfCheck = await prisma.workflow.findUnique({ where: { id: instance.id } });
+      expect(wfCheck?.status).toBe(WorkflowStatus.WAITING);
+
+      const stepExecute = await prisma.workflowStep.findUnique({
+        where: { workflowId_key: { workflowId: instance.id, key: 'STEP_EXECUTE' } },
+        include: { jobs: true },
+      });
+      expect(stepExecute?.status).toBe(WorkflowStepStatus.PENDING);
+      expect(stepExecute?.jobs).toHaveLength(0);
     });
   });
 });

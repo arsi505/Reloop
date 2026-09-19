@@ -1,4 +1,4 @@
-import { WorkflowTemplate } from './types';
+﻿import { WorkflowTemplate } from './types';
 
 /**
  * Infrastructure-only test template: Linear sequence A -> B -> C.
@@ -142,6 +142,79 @@ export const SYSTEM_RETRY_V1: WorkflowTemplate = {
 };
 
 /**
+ * Infrastructure-only test template: Human-in-the-loop approval workflow.
+ * STEP_CHECK -> STEP_APPROVAL (waits for human decision) -> STEP_EXECUTE -> STEP_VERIFY.
+ */
+export const SYSTEM_APPROVAL_V1: WorkflowTemplate = {
+  key: 'SYSTEM_APPROVAL',
+  version: 1,
+  name: 'System Test Approval Workflow V1',
+  steps: [
+    {
+      key: 'STEP_CHECK',
+      name: 'Step Check - Pre-Approval Verification',
+      type: 'EXECUTION',
+      handlerKey: 'OUTPUT',
+      dependsOn: [],
+      maxAttempts: 3,
+      priority: 10,
+    },
+    {
+      key: 'STEP_APPROVAL',
+      name: 'Step Approval - Human in the Loop Decision',
+      type: 'APPROVAL',
+      dependsOn: ['STEP_CHECK'],
+      preview: {
+        version: 1,
+        problem: 'Simulated carrier delivery exception detected requiring order remediation',
+        proposedAction: 'Re-issue replacement shipment with priority carrier dispatch',
+        why: 'Original tracking number marked damaged in transit by carrier',
+        safetyChecks: [
+          'Verify original inventory allocation released',
+          'Confirm customer shipping address is deliverable',
+          'Ensure idempotency key matches original order reference',
+        ],
+        changes: [
+          'Generate replacement shipment label',
+          'Deduct inventory from alternate fulfillment node',
+        ],
+        nonChanges: [
+          'Do not modify existing payment authorization',
+          'Do not change customer contact preferences',
+        ],
+        systems: ['Shopify', 'ShipStation', 'InventoryService'],
+        risks: [
+          'Potential duplicate shipment if carrier recovers original package',
+        ],
+        recoveryLevel: 'L2_REPLACE',
+        caseReference: 'CASE-SYS-APP-001',
+        orderReference: 'ORD-TEST-9988',
+        expectedVerification: 'Confirm new tracking ID is registered and active within 15 minutes',
+      },
+      priority: 10,
+    },
+    {
+      key: 'STEP_EXECUTE',
+      name: 'Step Execute - Post-Approval Action',
+      type: 'EXECUTION',
+      handlerKey: 'OUTPUT',
+      dependsOn: ['STEP_APPROVAL'],
+      maxAttempts: 3,
+      priority: 10,
+    },
+    {
+      key: 'STEP_VERIFY',
+      name: 'Step Verify - Post-Execution Validation',
+      type: 'EXECUTION',
+      handlerKey: 'OUTPUT',
+      dependsOn: ['STEP_EXECUTE'],
+      maxAttempts: 3,
+      priority: 10,
+    },
+  ],
+};
+
+/**
  * Helper to populate registry with default system test templates.
  */
 export function registerSystemTemplates(registry: { register: (t: WorkflowTemplate) => void }): void {
@@ -149,4 +222,5 @@ export function registerSystemTemplates(registry: { register: (t: WorkflowTempla
   registry.register(SYSTEM_PARALLEL_JOIN_V1);
   registry.register(SYSTEM_CONDITIONAL_V1);
   registry.register(SYSTEM_RETRY_V1);
+  registry.register(SYSTEM_APPROVAL_V1);
 }

@@ -23,7 +23,25 @@ function deepCloneAndFreeze(template: WorkflowTemplate): WorkflowTemplate {
     steps: template.steps.map((step) => ({
       key: step.key,
       name: step.name,
+      type: step.type,
       handlerKey: step.handlerKey,
+      preview: step.preview
+        ? {
+            version: step.preview.version,
+            problem: step.preview.problem,
+            proposedAction: step.preview.proposedAction,
+            why: step.preview.why,
+            safetyChecks: [...step.preview.safetyChecks],
+            changes: [...step.preview.changes],
+            nonChanges: [...step.preview.nonChanges],
+            systems: [...step.preview.systems],
+            risks: [...step.preview.risks],
+            recoveryLevel: step.preview.recoveryLevel,
+            caseReference: step.preview.caseReference,
+            orderReference: step.preview.orderReference,
+            expectedVerification: step.preview.expectedVerification,
+          }
+        : undefined,
       dependsOn: step.dependsOn ? [...step.dependsOn] : undefined,
       condition: step.condition
         ? step.condition.type === 'STEP_OUTPUT_EQUALS'

@@ -13,10 +13,30 @@ export interface StepOutputEqualsCondition {
 
 export type WorkflowCondition = AlwaysCondition | StepOutputEqualsCondition;
 
+export type WorkflowStepType = 'EXECUTION' | 'APPROVAL';
+
+export interface RecoveryPreview {
+  version: 1;
+  problem: string;
+  proposedAction: string;
+  why: string;
+  safetyChecks: string[];
+  changes: string[];
+  nonChanges: string[];
+  systems: string[];
+  risks: string[];
+  recoveryLevel?: string;
+  caseReference?: string;
+  orderReference?: string;
+  expectedVerification?: string;
+}
+
 export interface WorkflowStepDefinition {
   key: string;
   name: string;
-  handlerKey: string;
+  type?: WorkflowStepType;
+  handlerKey?: string;
+  preview?: RecoveryPreview;
   dependsOn?: string[];
   condition?: WorkflowCondition;
   maxAttempts?: number;
