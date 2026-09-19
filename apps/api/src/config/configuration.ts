@@ -20,6 +20,8 @@ export default () => {
     jwtAccessTtl: process.env.JWT_ACCESS_TTL || '15m',
     refreshSessionTtlDays: parseInt(process.env.REFRESH_SESSION_TTL_DAYS || '7', 10),
     refreshCookieName: process.env.REFRESH_COOKIE_NAME || 'reloop_refresh',
+    simulatorWebhookSecret: process.env.SIMULATOR_WEBHOOK_SECRET || 'reloop_simulator_webhook_secret_dev',
+    webhookMaxPayloadBytes: parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES || '1048576', 10),
     nodeEnv,
   };
 };

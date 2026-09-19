@@ -165,3 +165,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Canonical Lifecycle Invariant**: `CHECK -> (optional APPROVAL) -> EXECUTE -> VERIFY -> RESOLVED`. No case is resolved without independent verification of authoritative state.
 - **Simulator Action Adapter**: Executes safe, idempotent compensations against deterministic simulator endpoints using stable idempotency keys. Zero calls to real external APIs. Zero inventory mutations.
 - **Case Resolution Guard**: `CaseResolutionService` atomically transitions cases to `RESOLVED` only when linked `VERIFY` step succeeds and confirms invariant satisfaction, preserving original detection evidence. See [recovery-engine.md](./recovery-engine.md).
+
+---
+
+## 12. Secure Webhook Ingestion & Event Deduplication
+
+- **Cryptographic Verification**: Ingests provider webhooks with timing-safe HMAC-SHA256 verification using the raw request body (`req.rawBody: Buffer`).
+- **Strict Tenant Derivation**: Organization authority is strictly loaded from `Integration.organizationId`, ignoring untrusted payload claims.
+- **Durable Deduplication**: Uses database-enforced `@@unique([integrationId, providerEventId])` to deduplicate racing or retried deliveries before asynchronous processing.
+- **Idempotent Projection & Out-of-Order Guard**: Projects events into `ExternalOrder` and `ExternalReference`, safely ignoring stale out-of-order events based on `lastObservedAt`.
+- **Targeted Reconciliation**: Triggers order-specific reconciliation immediately upon state projection while preserving the periodic scanner as a safety net. Zero direct recovery actions from webhooks. See [webhook-ingestion.md](./webhook-ingestion.md).

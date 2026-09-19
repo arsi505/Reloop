@@ -9,6 +9,7 @@ import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ApprovalsModule } from './approvals/approvals.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { ApprovalsModule } from './approvals/approvals.module';
     AuthModule,
     OrganizationsModule,
     ApprovalsModule,
+    WebhooksModule,
   ],
   providers: [
     {

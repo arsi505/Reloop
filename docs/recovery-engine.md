@@ -47,3 +47,11 @@ The router evaluates each `RecoveryCase` by its canonical failure type and recov
 - **Separate Durable Step**: EXECUTE and VERIFY are distinct steps.
 - **HTTP Success != Resolution**: A 200 response from an external API only indicates request acceptance. Only VERIFY can inspect authoritative state and authorize case resolution.
 - **Case Resolution Service**: A dedicated service updates `RecoveryCase` status to `RESOLVED`, records the timestamp, and preserves original detection evidence alongside resolution metrics.
+
+---
+
+## 5. Upstream Integration: Webhook Ingestion Pipeline (Day 14)
+
+Day 14 introduces the secure external webhook ingestion pipeline:
+- **No Direct Recovery**: Webhooks ingest facts, update projections, and trigger targeted reconciliation. They NEVER call `RecoveryActionExecutor`, create approvals, or execute mutations directly.
+- **Authoritative Rereads Retained**: Because webhooks can be dropped or delayed, Day 13 `CHECK` and `VERIFY` steps still perform live, authoritative state rereads. See [webhook-ingestion.md](./webhook-ingestion.md).

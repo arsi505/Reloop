@@ -90,3 +90,12 @@ Detected `RecoveryCase` rows created by the reconciliation engine are automatica
 - Stuck orders transition to `INVESTIGATING` with a read-only investigation workflow.
 - Missing tracking, missing orders, and unsynced fulfillments route to approval-gated or automated recovery workflows.
 - Cases are only resolved upon successful post-execution verification (`VERIFY` step) confirming that authoritative state conforms to business invariants. See [recovery-engine.md](./recovery-engine.md).
+
+---
+
+## 8. Event-Driven Targeted Reconciliation (Day 14)
+
+While the periodic reconciliation scanner continuously sweeps all organizations, Day 14 introduces **event-driven targeted reconciliation**:
+- Webhooks updating order or shipment state immediately invoke `TargetedReconciliationService.reconcileTargetedOrder()`.
+- Only the specific affected order is evaluated against the pure reconciliation rules, minimizing latency from minutes to milliseconds.
+- Any detected discrepancies flow into `CaseDetectionService` with the same transactional advisory locking guarantees. See [webhook-ingestion.md](./webhook-ingestion.md).

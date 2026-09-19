@@ -141,3 +141,4 @@ export interface SimulatorHealthResponse {
 }
 
 export * from './recovery-actions';
+export * from './simulator-webhook-adapter';
