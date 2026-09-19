@@ -146,3 +146,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Immutable Preview Snapshot**: Paused approval steps persist a frozen \RecoveryPreview\ JSON snapshot in \Approval.previewSnapshot\ explaining the problem, proposed action, changes, non-changes, risks, and verification criteria.
 - **Optimistic Fenced CAS**: Approval decisions (\APPROVED\ or \REJECTED\) execute in an atomic transaction with row locks (\SELECT FOR UPDATE\) asserting current \WAITING\ and \PENDING\ states, preventing concurrent decision races and stale revival of terminal workflows.
 - **Atomic Audit Trail**: \APPROVAL_APPROVED\ or \APPROVAL_REJECTED\ audit events are persisted in the exact same transaction as the approval decision. See [approval-engine.md](./approval-engine.md).
+
+---
+
+## 10. Cross-System Reconciliation & Recovery Case Detection
+
+- **Reconciliation Scope**: Evaluates normalized state snapshots across Shopify, generic 3PL, and ShipStation systems to detect operational failures without executing recovery.
+- **Pure Core Engine**: Implemented in \@reloop/reconciliation-core\ with zero database, Redis, or HTTP dependencies. 100% deterministic and explainable.
+- **Canonical Failure Rules**: Enforces all 8 canonical \RecoveryCaseType\ categories: \TEMPORARY_API_FAILURE\, \TRACKING_MISSING_IN_SHOPIFY\, \STUCK_ORDER\, \ORDER_MISSING_AT_3PL\, \SHIPPED_AT_3PL_UNFULFILLED_AT_SHOPIFY\, \INVENTORY_MISMATCH\, \DUPLICATE_RISK\, and \INVALID_ORDER_DATA\.
+- **Safety Precedence & Integration Health Gating**: High-risk conditions (\DUPLICATE_RISK\, \INVALID_ORDER_DATA\) halt automated recovery. Transient API errors gate downstream rules to avoid false-positive missing order detections.
+- **Deduplication & Concurrency**: Uses \dedupeKey\ and PostgreSQL advisory locks to guarantee that racing detector processes resolve to exactly one active \RecoveryCase\. Reuses open cases and records distinct incidents for recurrences. See [reconciliation-engine.md](./reconciliation-engine.md).

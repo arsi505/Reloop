@@ -3,7 +3,7 @@ module.exports = {
   rootDir: '.',
   testRegex: '.*\\.spec\\.ts$',
   transform: {
-    '^.+\\.ts$': [
+    '^.+\\.(t|j)s$': [
       'ts-jest',
       {
         tsconfig: {

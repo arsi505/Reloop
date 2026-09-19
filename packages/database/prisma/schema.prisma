@@ -351,6 +351,8 @@ model RecoveryCase {
   summary             String
   detectedAt          DateTime           @default(now()) @map("detected_at")
   resolvedAt          DateTime?          @map("resolved_at")
+  dedupeKey           String?            @map("dedupe_key")
+  evidence            Json?              @default("{}")
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
 
@@ -363,6 +365,7 @@ model RecoveryCase {
 
   @@index([organizationId, status])
   @@index([organizationId, type])
+  @@index([organizationId, dedupeKey])
   @@index([externalOrderId])
   @@index([sourceIntegrationId])
   @@index([assignedUserId])

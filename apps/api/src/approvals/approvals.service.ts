@@ -114,7 +114,15 @@ export class ApprovalsService {
         throw new NotFoundException(`Approval ${id} not found`);
       }
 
-      if (approval.status !== ApprovalStatus.PENDING) {
+      // 1. Fetch and row-lock approval with tenant scoping
+      const lockedApprovals = await tx.$queryRaw<{ id: string; status: ApprovalStatus }[]>`
+        SELECT id, status FROM approvals
+        WHERE id = ${id}::uuid
+          AND organization_id = ${organizationId}::uuid
+        FOR UPDATE
+      `;
+      const lockedApproval = lockedApprovals[0];
+      if (!lockedApproval || lockedApproval.status !== ApprovalStatus.PENDING) {
         throw new ConflictException(
           'Approval has already been decided or is not pending',
         );
@@ -269,7 +277,15 @@ export class ApprovalsService {
         throw new NotFoundException(`Approval ${id} not found`);
       }
 
-      if (approval.status !== ApprovalStatus.PENDING) {
+      // Lock approval row for update
+      const lockedApprovals = await tx.$queryRaw<{ id: string; status: ApprovalStatus }[]>`
+        SELECT id, status FROM approvals
+        WHERE id = ${id}::uuid
+          AND organization_id = ${organizationId}::uuid
+        FOR UPDATE
+      `;
+      const lockedApproval = lockedApprovals[0];
+      if (!lockedApproval || lockedApproval.status !== ApprovalStatus.PENDING) {
         throw new ConflictException(
           'Approval has already been decided or is not pending',
         );

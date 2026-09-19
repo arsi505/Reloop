@@ -13,6 +13,8 @@ export interface SchedulerConfig {
   instanceId: string;
   workflowScanIntervalMs: number;
   workflowScanBatchSize: number;
+  reconciliationScanIntervalMs: number;
+  reconciliationScanBatchSize: number;
 }
 
 export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): SchedulerConfig {
@@ -36,6 +38,12 @@ export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): S
   const rawWorkflowBatchSize = overrides.workflowScanBatchSize ?? (process.env.WORKFLOW_SCAN_BATCH_SIZE ? parseInt(process.env.WORKFLOW_SCAN_BATCH_SIZE, 10) : 20);
   const workflowScanBatchSize = Number.isFinite(rawWorkflowBatchSize) && rawWorkflowBatchSize > 0 ? rawWorkflowBatchSize : 20;
 
+  const rawReconcileInterval = overrides.reconciliationScanIntervalMs ?? (process.env.RECONCILIATION_SCAN_INTERVAL_MS ? parseInt(process.env.RECONCILIATION_SCAN_INTERVAL_MS, 10) : 5000);
+  const reconciliationScanIntervalMs = Number.isFinite(rawReconcileInterval) && rawReconcileInterval > 0 ? rawReconcileInterval : 5000;
+
+  const rawReconcileBatchSize = overrides.reconciliationScanBatchSize ?? (process.env.RECONCILIATION_SCAN_BATCH_SIZE ? parseInt(process.env.RECONCILIATION_SCAN_BATCH_SIZE, 10) : 50);
+  const reconciliationScanBatchSize = Number.isFinite(rawReconcileBatchSize) && rawReconcileBatchSize > 0 ? rawReconcileBatchSize : 50;
+
   const instanceId = overrides.instanceId ?? ('scheduler-' + process.pid + '-' + Math.random().toString(36).substring(2, 9));
 
   return {
@@ -48,6 +56,8 @@ export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): S
     dispatchMarkerTtlMs,
     workflowScanIntervalMs,
     workflowScanBatchSize,
+    reconciliationScanIntervalMs,
+    reconciliationScanBatchSize,
     instanceId,
   };
 }
