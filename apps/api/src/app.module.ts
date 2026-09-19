@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     OrganizationsModule,
     ApprovalsModule,
     WebhooksModule,
+    IntegrationsModule,
   ],
   providers: [
     {

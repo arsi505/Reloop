@@ -1,0 +1,23 @@
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
+import { AuthModule } from '../auth/auth.module';
+import { IntegrationsController } from './integrations.controller';
+import { ShopifyOAuthService } from './shopify-oauth.service';
+import { ShopifyTokenRefreshService } from './shopify-token-refresh.service';
+import { ShopifySyncService } from './shopify-sync.service';
+
+@Module({
+  imports: [PrismaModule, AuthModule],
+  controllers: [IntegrationsController],
+  providers: [
+    ShopifyOAuthService,
+    ShopifyTokenRefreshService,
+    ShopifySyncService,
+  ],
+  exports: [
+    ShopifyOAuthService,
+    ShopifyTokenRefreshService,
+    ShopifySyncService,
+  ],
+})
+export class IntegrationsModule {}

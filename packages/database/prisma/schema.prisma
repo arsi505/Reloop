@@ -175,6 +175,7 @@ model User {
   requestedApprovals    Approval[]           @relation("RequestedApprovals")
   decidedApprovals      Approval[]           @relation("DecidedApprovals")
   auditLogs             AuditLog[]
+  oauthStates           OAuthState[]
 
   @@map("users")
 }
@@ -197,6 +198,7 @@ model Organization {
   jobs               Job[]
   approvals          Approval[]
   auditLogs          AuditLog[]
+  oauthStates        OAuthState[]
 
   @@map("organizations")
 }
@@ -247,10 +249,12 @@ model Integration {
   organizationId     String              @map("organization_id") @db.Uuid
   provider           IntegrationProvider
   name               String
-  status             IntegrationStatus   @default(CONNECTED)
-  mode               OperationalMode     @default(OBSERVE)
-  configuration      Json?               @default("{}")
-  createdAt          DateTime            @default(now()) @map("created_at")
+  status               IntegrationStatus   @default(CONNECTED)
+  mode                 OperationalMode     @default(OBSERVE)
+  configuration        Json?               @default("{}")
+  shopDomain           String?             @unique @map("shop_domain")
+  encryptedCredentials Json?               @map("encrypted_credentials")
+  createdAt            DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")
 
   organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -552,4 +556,23 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([actorUserId])
   @@map("audit_logs")
+}
+
+model OAuthState {
+  id             String              @id @default(uuid()) @db.Uuid
+  state          String              @unique
+  organizationId String              @map("organization_id") @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  provider       IntegrationProvider
+  shopDomain     String              @map("shop_domain")
+  expiresAt      DateTime            @map("expires_at")
+  usedAt         DateTime?           @map("used_at")
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([state])
+  @@index([organizationId])
+  @@map("oauth_states")
 }

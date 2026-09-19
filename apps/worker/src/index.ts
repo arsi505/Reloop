@@ -14,6 +14,7 @@ export * from './stale-message-recovery';
 export * from './workflow-step-registry';
 export * from './workflow-step-executor';
 export * from './recovery-step-handlers';
+export * from './shopify-sync-executor';
 export * from './worker-service';
 
 async function bootstrap() {

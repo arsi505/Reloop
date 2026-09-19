@@ -175,3 +175,15 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Durable Deduplication**: Uses database-enforced `@@unique([integrationId, providerEventId])` to deduplicate racing or retried deliveries before asynchronous processing.
 - **Idempotent Projection & Out-of-Order Guard**: Projects events into `ExternalOrder` and `ExternalReference`, safely ignoring stale out-of-order events based on `lastObservedAt`.
 - **Targeted Reconciliation**: Triggers order-specific reconciliation immediately upon state projection while preserving the periodic scanner as a safety net. Zero direct recovery actions from webhooks. See [webhook-ingestion.md](./webhook-ingestion.md).
+
+---
+
+## 13. Real Shopify Connection, Authentication & Read-Only State Sync
+
+- **Strict Read-Only Guarantee**: Shopify is the first real external provider introduced into Reloop, operating under an inviolable zero-mutation invariant (`readCapability: true`, `mutationCapability: false`). Day 13 recovery workflows remain strictly simulator-only.
+- **Hardened OAuth 2.0 Flow**: Supports authorization code grant with single-use `OAuthState` (10m TTL), constant-time HMAC query verification, strict SSRF domain guards (canonical `.myshopify.com` only), cross-tenant store uniqueness, and RBAC (`OWNER`/`ADMIN` only). Token exchange explicitly requests expiring offline tokens (`expiring=1`) and persists encrypted full lifecycle metadata (`accessTokenExpiresAt`, `refreshTokenExpiresAt`).
+- **Scope Minimization**: Requests strictly the minimal required read scope (`read_orders` only); `read_inventory` and `read_locations` are eliminated. Zero write scopes are requested.
+- **AES-256-GCM Envelope Encryption**: Access and refresh tokens are encrypted at rest using versioned envelopes (`iv`, `tag`, `ciphertext`, `keyId`) with a 256-bit master key. Zero plaintext tokens exist in the database, logs, or API responses.
+- **Advisory-Locked Token Refresh**: Automated token refresh uses PostgreSQL transactional advisory locks (`pg_advisory_xact_lock`) to serialize concurrent refresh attempts across worker and API replicas, with a double-check pattern and distinction between transient network errors (safe for retry with existing refresh token) and permanent revocations (degrades integration).
+- **Durable Sync Handoff & Crash-Recovery**: OAuth callback enqueues a durable `Job` (`SHOPIFY_SYNC_ORDERS`, `status: QUEUED`) and returns immediately without in-memory fire-and-forget promises. Replacement processors sweep and execute pending sync requests upon startup with idempotent projection.
+- **GraphQL Admin API (2026-07)**: Synchronizes order and fulfillment state with cursor-based pagination and leaky bucket rate limit cost tracking. Deterministic normalization minimizes PII and consolidates multi-fulfillment tracking numbers. See [shopify-integration.md](./shopify-integration.md).

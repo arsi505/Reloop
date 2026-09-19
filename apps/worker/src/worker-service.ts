@@ -11,6 +11,7 @@ import { classifyJobError } from './errors';
 import { StaleMessageRecoveryService } from './stale-message-recovery';
 import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
 import { WorkflowStepExecutor } from './workflow-step-executor';
+import { ShopifySyncJobExecutor } from './shopify-sync-executor';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -45,6 +46,8 @@ export class WorkerService {
       executorRegistry?: JobExecutorRegistry;
       stepHandlerRegistry?: WorkflowStepHandlerRegistry;
       retryPolicy?: RetryPolicy;
+      shopifySyncExecutor?: ShopifySyncJobExecutor;
+      fetchFn?: typeof fetch;
     } = {},
   ) {
     this.config = config;
@@ -56,6 +59,17 @@ export class WorkerService {
       const stepExecutor = new WorkflowStepExecutor(this.prisma, this.stepHandlerRegistry);
       this.executorRegistry.register('WORKFLOW_STEP', async (ctx) => {
         return await stepExecutor.execute(ctx);
+      });
+    }
+
+    if (!this.executorRegistry.has('SHOPIFY_SYNC_ORDERS')) {
+      const shopifySync =
+        options.shopifySyncExecutor ??
+        new ShopifySyncJobExecutor(this.prisma, {
+          fetchFn: options.fetchFn,
+        });
+      this.executorRegistry.register('SHOPIFY_SYNC_ORDERS', async (ctx) => {
+        return await shopifySync.execute(ctx);
       });
     }
 

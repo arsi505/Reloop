@@ -55,3 +55,12 @@ The router evaluates each `RecoveryCase` by its canonical failure type and recov
 Day 14 introduces the secure external webhook ingestion pipeline:
 - **No Direct Recovery**: Webhooks ingest facts, update projections, and trigger targeted reconciliation. They NEVER call `RecoveryActionExecutor`, create approvals, or execute mutations directly.
 - **Authoritative Rereads Retained**: Because webhooks can be dropped or delayed, Day 13 `CHECK` and `VERIFY` steps still perform live, authoritative state rereads. See [webhook-ingestion.md](./webhook-ingestion.md).
+
+---
+
+## 6. External Provider Boundary: Read-Only Shopify (Day 15)
+
+Day 15 introduces Shopify as the first real external provider:
+- **Read-Only Invariant**: Shopify operates strictly in read-only mode (`readCapability: true`, `mutationCapability: false`).
+- **No Real Commerce Mutations**: Automated recovery workflows remain exclusively simulator-backed. Real Shopify stores are never subjected to write mutations, fulfillment creation, tracking updates, or cancellation.
+- **State Projection Only**: Shopify webhooks and GraphQL sync populate `ExternalOrder` and `ExternalReference` projections to drive reconciliation detection and visibility. See [shopify-integration.md](./shopify-integration.md).

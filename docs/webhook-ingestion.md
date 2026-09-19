@@ -66,16 +66,21 @@ External Provider / Simulator Webhook
 ## 2. Cryptographic Signature Verification & Raw Body Requirement
 
 1. **Exact Raw Request Body**: Signature verification operates exclusively on the exact incoming byte stream (`req.rawBody: Buffer`), preserved via NestJS `{ rawBody: true }`. JSON re-serialization is strictly forbidden to prevent canonical byte discrepancies.
-2. **HMAC-SHA256 Algorithm**: The digest is computed using `crypto.createHmac('sha256', secret)`.
-3. **Constant-Time Comparison**: Signatures are verified using `crypto.timingSafeEqual`. Fixed length checking (64 hex characters) and regex guards prevent `RangeError` exceptions and timing side-channel attacks.
+2. **HMAC-SHA256 Algorithm**:
+   - Simulator: Hex-encoded HMAC-SHA256 in `X-Reloop-Signature`.
+   - Shopify: Base64-encoded HMAC-SHA256 in `X-Shopify-Hmac-SHA256`.
+3. **Constant-Time Comparison**: Signatures are verified using `crypto.timingSafeEqual`. Fixed length checking and regex guards prevent `RangeError` exceptions and timing side-channel attacks.
 4. **Invalid & Missing Signatures**: Missing or mismatched signatures immediately reject the request with `401 Unauthorized`. Zero `IntegrationEvent` records are persisted.
 
 ---
 
 ## 3. Tenant Authority & Ingestion Boundaries
 
-- **Authoritative Tenant Resolution**: The tenant identity is strictly derived from `Integration.organizationId` loaded from the database via `:integrationId`.
-- **Payload Spoofing Prevention**: Any `organizationId` present within the webhook payload body is ignored. Cross-tenant event injection is cryptographically and architecturally impossible.
+- **Authoritative Tenant Resolution**:
+  - For ID-based webhook endpoints (`/webhooks/:integrationId`): Tenant identity is strictly derived from `Integration.organizationId` loaded from the database via `:integrationId`.
+  - For Shopify provider endpoint (`/webhooks/shopify`): Tenant identity is resolved by querying `Integration` with `shopDomain: req.headers['x-shopify-shop-domain']`.
+- **Provider Path Binding Guard**: An integration registered with provider `SIMULATOR` cannot send payloads to `/webhooks/shopify` or vice versa. Provider mismatch returns `400 Bad Request`.
+- **Payload Spoofing Prevention**: Any `organizationId` present within the webhook payload body is completely ignored. Cross-tenant event injection is cryptographically and architecturally impossible.
 
 ---
 

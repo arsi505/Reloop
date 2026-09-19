@@ -99,3 +99,11 @@ While the periodic reconciliation scanner continuously sweeps all organizations,
 - Webhooks updating order or shipment state immediately invoke `TargetedReconciliationService.reconcileTargetedOrder()`.
 - Only the specific affected order is evaluated against the pure reconciliation rules, minimizing latency from minutes to milliseconds.
 - Any detected discrepancies flow into `CaseDetectionService` with the same transactional advisory locking guarantees. See [webhook-ingestion.md](./webhook-ingestion.md).
+
+---
+
+## 9. Real Shopify State Synchronization (Day 15)
+
+- **Read-Only External Provider**: Orders and fulfillments from connected real Shopify merchant stores are ingested into `ExternalOrder` and `ExternalReference` projections via GraphQL Admin API (`2026-07`) cursor queries and authenticated webhooks.
+- **Multi-Fulfillment Consolidation**: Shopify multi-fulfillment tracking numbers and carrier metadata are consolidated deterministically into the normalized order snapshot.
+- **Safety Invariant**: Reconciler evaluates real Shopify mirrored orders against warehouse and 3PL representations without executing any Shopify mutations. See [shopify-integration.md](./shopify-integration.md).
