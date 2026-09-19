@@ -1,15 +1,21 @@
-﻿import {
+import {
   WorkflowTemplateRegistry,
   validateWorkflowTemplate,
   validateRecoveryPreview,
   WorkflowTemplateValidationError,
   evaluateCondition,
   registerSystemTemplates,
+  registerRecoveryTemplates,
   SYSTEM_LINEAR_V1,
   SYSTEM_PARALLEL_JOIN_V1,
   SYSTEM_CONDITIONAL_V1,
   SYSTEM_RETRY_V1,
   SYSTEM_APPROVAL_V1,
+  RECOVERY_TRACKING_MISSING_AUTO_V1,
+  RECOVERY_TRACKING_MISSING_APPROVAL_V1,
+  RECOVERY_ORDER_MISSING_3PL_V1,
+  RECOVERY_SHIPPED_UNFULFILLED_V1,
+  RECOVERY_STUCK_INVESTIGATION_V1,
   WorkflowTemplate,
 } from '../src';
 
@@ -18,6 +24,52 @@ describe('WorkflowTemplateRegistry & DAG Validation', () => {
 
   beforeEach(() => {
     registry = new WorkflowTemplateRegistry();
+  });
+
+  describe('Recovery Templates Validation', () => {
+    it('validates and registers all 5 canonical recovery templates cleanly', () => {
+      registerRecoveryTemplates(registry);
+
+      expect(registry.has('RECOVERY_TRACKING_MISSING_AUTO', 1)).toBe(true);
+      expect(registry.has('RECOVERY_TRACKING_MISSING_APPROVAL', 1)).toBe(true);
+      expect(registry.has('RECOVERY_ORDER_MISSING_3PL', 1)).toBe(true);
+      expect(registry.has('RECOVERY_SHIPPED_UNFULFILLED', 1)).toBe(true);
+      expect(registry.has('RECOVERY_STUCK_INVESTIGATION', 1)).toBe(true);
+
+      const all = registry.getAll();
+      expect(all).toHaveLength(5);
+    });
+
+    it('validates DAG step structures and handlers for recovery templates', () => {
+      expect(RECOVERY_TRACKING_MISSING_AUTO_V1.steps.map((s) => s.key)).toEqual([
+        'CHECK',
+        'EXECUTE',
+        'VERIFY',
+      ]);
+      expect(RECOVERY_TRACKING_MISSING_APPROVAL_V1.steps.map((s) => s.key)).toEqual([
+        'CHECK',
+        'APPROVAL',
+        'EXECUTE',
+        'VERIFY',
+      ]);
+      expect(RECOVERY_ORDER_MISSING_3PL_V1.steps.map((s) => s.key)).toEqual([
+        'CHECK',
+        'APPROVAL',
+        'EXECUTE',
+        'VERIFY',
+      ]);
+      expect(RECOVERY_SHIPPED_UNFULFILLED_V1.steps.map((s) => s.key)).toEqual([
+        'CHECK',
+        'APPROVAL',
+        'EXECUTE',
+        'VERIFY',
+      ]);
+      expect(RECOVERY_STUCK_INVESTIGATION_V1.steps.map((s) => s.key)).toEqual([
+        'CHECK',
+        'INVESTIGATE',
+        'VERIFY',
+      ]);
+    });
   });
 
   describe('System Templates Validation', () => {

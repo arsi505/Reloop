@@ -1,4 +1,4 @@
-﻿# Reloop Versioned Workflow & DAG Orchestration Engine
+# Reloop Versioned Workflow & DAG Orchestration Engine
 
 ## 1. Overview & Architecture
 
@@ -167,5 +167,14 @@ The engine includes four infrastructure-only test templates in `@reloop/workflow
 2. `SYSTEM_PARALLEL_JOIN_V1`: `STEP_A -> (STEP_B, STEP_C) in parallel -> STEP_D` (synchronization barrier)
 3. `SYSTEM_CONDITIONAL_V1`: `STEP_A -> STEP_B (conditional) -> STEP_C`
 4. `SYSTEM_RETRY_V1`: `STEP_A` (transient failure on attempt 1, success on attempt 2)
+5. `SYSTEM_APPROVAL_V1`: `STEP_CHECK -> STEP_APPROVAL (HITL Pause) -> STEP_EXECUTE -> STEP_VERIFY` (See [Approval Engine Documentation](./approval-engine.md))
 
-5. SYSTEM_APPROVAL_V1: STEP_CHECK -> STEP_APPROVAL (HITL Pause) -> STEP_EXECUTE -> STEP_VERIFY (See [Approval Engine Documentation](./approval-engine.md))
+### Recovery Workflow Templates
+Defined in `@reloop/workflow-core` for deterministic automated and HITL recovery:
+6. `RECOVERY_TRACKING_MISSING_AUTO`: `CHECK -> EXECUTE -> VERIFY` (Auto-remediation of missing tracking)
+7. `RECOVERY_TRACKING_MISSING_APPROVAL`: `CHECK -> APPROVAL -> EXECUTE -> VERIFY` (Approval-gated tracking push)
+8. `RECOVERY_ORDER_MISSING_3PL`: `CHECK -> APPROVAL -> EXECUTE -> VERIFY` (Approval-gated 3PL injection)
+9. `RECOVERY_SHIPPED_UNFULFILLED`: `CHECK -> APPROVAL -> EXECUTE -> VERIFY` (Approval-gated fulfillment sync)
+10. `RECOVERY_STUCK_INVESTIGATION`: `CHECK -> INVESTIGATE -> VERIFY` (Strictly read-only diagnostic collection)
+
+See [Recovery Engine Documentation](./recovery-engine.md) for full execution semantics and verification guarantees.

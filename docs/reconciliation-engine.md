@@ -80,3 +80,13 @@ Repeated scans of the same unresolved issue must not flood the database with dup
 3. **Active Case Reuse**: If an active (non-terminal) case already exists for this `(organizationId, dedupeKey)`, the service updates `evidence` and `summary` and returns the existing row.
 4. **Incident Recurrence**: If a previously resolved or failed case recurs, it represents a new incident; a fresh `RecoveryCase` is created without mutating historical records.
 5. **Tenant Isolation**: Every database operation is strictly scoped by `organizationId`.
+
+---
+
+## 7. Downstream Hand-off to Recovery Engine (Day 13)
+
+Detected `RecoveryCase` rows created by the reconciliation engine are automatically discovered and scheduled by the Day 13 **Recovery Policy Router** (`RecoveryRouterScanner` and `RecoveryRouterService`):
+- High-risk cases (`DUPLICATE_RISK`, `INVALID_ORDER_DATA`, `INVENTORY_MISMATCH`) transition to `BLOCKED`.
+- Stuck orders transition to `INVESTIGATING` with a read-only investigation workflow.
+- Missing tracking, missing orders, and unsynced fulfillments route to approval-gated or automated recovery workflows.
+- Cases are only resolved upon successful post-execution verification (`VERIFY` step) confirming that authoritative state conforms to business invariants. See [recovery-engine.md](./recovery-engine.md).

@@ -49,28 +49,28 @@ The repository will be structured as a modular TypeScript monorepo:
 
 ```
 Reloop/
-├── apps/
-�?  ├── web/                     # Next.js web application (Dashboard, Exception Inbox, Previews)
-�?  ├── api/                     # NestJS core backend API & Webhook Ingestion
-�?  ├── scheduler/               # Scheduled cron engine (reconciliation pollers, heartbeat sweeps)
-�?  └── worker/                  # Background worker daemon consuming recovery execution jobs
-�?├── packages/
-�?  ├── database/                # Prisma schema, client, migrations, and database seeders
-�?  ├── contracts/               # Shared TypeScript DTOs, API contracts, and event schemas
-�?  ├── workflow-core/           # Recovery state machines, verification logic, and safety rules
-�?  └── integration-sdk/         # Connector interfaces, rate-limiters, and normalized order models
-�?├── connectors/
-�?  ├── simulator/               # Mock 3PL and carrier simulator for robust local development & testing
-�?  ├── shopify/                 # Shopify Admin GraphQL/REST connector
-�?  ├── shipstation/             # ShipStation v1/v2 REST connector
-�?  └── generic-3pl/             # Standardized REST/Webhook connector for 3PL warehouse systems
-�?├── docker/
-�?  ├── docker-compose.yml       # Local development services (Postgres, Redis, app services)
-�?  └── Dockerfile.*             # Individual production container definitions
-�?├── docs/                        # Specifications, UX journeys, design system, architecture plans
-├── .gitignore                   # Repository ignore specifications
-├── LICENSE                      # MIT License
-└── README.md                    # Project overview and status
+â”œâ”€â”€ apps/
+â”?  â”œâ”€â”€ web/                     # Next.js web application (Dashboard, Exception Inbox, Previews)
+â”?  â”œâ”€â”€ api/                     # NestJS core backend API & Webhook Ingestion
+â”?  â”œâ”€â”€ scheduler/               # Scheduled cron engine (reconciliation pollers, heartbeat sweeps)
+â”?  â””â”€â”€ worker/                  # Background worker daemon consuming recovery execution jobs
+â”?â”œâ”€â”€ packages/
+â”?  â”œâ”€â”€ database/                # Prisma schema, client, migrations, and database seeders
+â”?  â”œâ”€â”€ contracts/               # Shared TypeScript DTOs, API contracts, and event schemas
+â”?  â”œâ”€â”€ workflow-core/           # Recovery state machines, verification logic, and safety rules
+â”?  â””â”€â”€ integration-sdk/         # Connector interfaces, rate-limiters, and normalized order models
+â”?â”œâ”€â”€ connectors/
+â”?  â”œâ”€â”€ simulator/               # Mock 3PL and carrier simulator for robust local development & testing
+â”?  â”œâ”€â”€ shopify/                 # Shopify Admin GraphQL/REST connector
+â”?  â”œâ”€â”€ shipstation/             # ShipStation v1/v2 REST connector
+â”?  â””â”€â”€ generic-3pl/             # Standardized REST/Webhook connector for 3PL warehouse systems
+â”?â”œâ”€â”€ docker/
+â”?  â”œâ”€â”€ docker-compose.yml       # Local development services (Postgres, Redis, app services)
+â”?  â””â”€â”€ Dockerfile.*             # Individual production container definitions
+â”?â”œâ”€â”€ docs/                        # Specifications, UX journeys, design system, architecture plans
+â”œâ”€â”€ .gitignore                   # Repository ignore specifications
+â”œâ”€â”€ LICENSE                      # MIT License
+â””â”€â”€ README.md                    # Project overview and status
 ```
 
 ---
@@ -84,15 +84,15 @@ Reloop/
 
 ### Recovery Execution Flow
 ```
-[Event Trigger] ────────�?[Ingestion / Poller]
-                                �?                                �?                       [Exception Created]
-                                �?        ┌───────────────────────┴───────────────────────�?        �?                                              �?[AUTO_RECOVER / INVESTIGATE]                  [REQUIRE_APPROVAL / BLOCK]
+[Event Trigger] â”€â”€â”€â”€â”€â”€â”€â”€â–?[Ingestion / Poller]
+                                â”?                                â–?                       [Exception Created]
+                                â”?        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”?        â–?                                              â–?[AUTO_RECOVER / INVESTIGATE]                  [REQUIRE_APPROVAL / BLOCK]
 Queued to Redis Stream worker                 UI shows Recovery Preview
-        �?                                              �?        �?                                              �?[Execute Idempotent Payload]                  [Human Operator Approves]
-        �?                                              �?        └───────────────────────┬───────────────────────�?                                �?                                �?                     [State: VERIFYING]
-                                �?                     (Independent GET query
+        â”?                                              â”?        â–?                                              â–?[Execute Idempotent Payload]                  [Human Operator Approves]
+        â”?                                              â”?        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”?                                â”?                                â–?                     [State: VERIFYING]
+                                â”?                     (Independent GET query
                       across both platforms)
-                                �?               ┌────────────────┴────────────────�?               �?                                �?       [State Converged]                 [State Divergent]
+                                â”?               â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”?               â–?                                â–?       [State Converged]                 [State Divergent]
       State -> RESOLVED                   Retry / Escalate
 ```
 
@@ -155,4 +155,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Pure Core Engine**: Implemented in \@reloop/reconciliation-core\ with zero database, Redis, or HTTP dependencies. 100% deterministic and explainable.
 - **Canonical Failure Rules**: Enforces all 8 canonical \RecoveryCaseType\ categories: \TEMPORARY_API_FAILURE\, \TRACKING_MISSING_IN_SHOPIFY\, \STUCK_ORDER\, \ORDER_MISSING_AT_3PL\, \SHIPPED_AT_3PL_UNFULFILLED_AT_SHOPIFY\, \INVENTORY_MISMATCH\, \DUPLICATE_RISK\, and \INVALID_ORDER_DATA\.
 - **Safety Precedence & Integration Health Gating**: High-risk conditions (\DUPLICATE_RISK\, \INVALID_ORDER_DATA\) halt automated recovery. Transient API errors gate downstream rules to avoid false-positive missing order detections.
-- **Deduplication & Concurrency**: Uses \dedupeKey\ and PostgreSQL advisory locks to guarantee that racing detector processes resolve to exactly one active \RecoveryCase\. Reuses open cases and records distinct incidents for recurrences. See [reconciliation-engine.md](./reconciliation-engine.md).
+- **Deduplication & Concurrency**: Uses `dedupeKey` and PostgreSQL advisory locks to guarantee that racing detector processes resolve to exactly one active `RecoveryCase`. Reuses open cases and records distinct incidents for recurrences. See [reconciliation-engine.md](./reconciliation-engine.md).
+
+---
+
+## 11. Recovery Policy Router & Simulator-Backed Verified Recovery
+
+- **Deterministic Routing**: Pure policy router evaluates detected `RecoveryCase` categories (`BLOCK`, `AUTO_INVESTIGATE`, `AUTO_RECOVER`, `REQUIRE_APPROVAL`).
+- **Canonical Lifecycle Invariant**: `CHECK -> (optional APPROVAL) -> EXECUTE -> VERIFY -> RESOLVED`. No case is resolved without independent verification of authoritative state.
+- **Simulator Action Adapter**: Executes safe, idempotent compensations against deterministic simulator endpoints using stable idempotency keys. Zero calls to real external APIs. Zero inventory mutations.
+- **Case Resolution Guard**: `CaseResolutionService` atomically transitions cases to `RESOLVED` only when linked `VERIFY` step succeeds and confirms invariant satisfaction, preserving original detection evidence. See [recovery-engine.md](./recovery-engine.md).

@@ -43,29 +43,25 @@ When an approval step pauses in `WAITING`, the workflow coordinator freezes the 
 ## 3. Workflow State Transitions & Flow
 
 ```
-   [STEP_CHECK: EXECUTION] ©¤©¤(succeeds)©¤©¤? [STEP_APPROVAL: APPROVAL]
-                                                   ©¦
-                                                   ¨‹
-                                        Step: WAITING, Workflow: WAITING
+   [STEP_CHECK: EXECUTION] Â©Â¤Â©Â¤(succeeds)Â©Â¤Â©Â¤? [STEP_APPROVAL: APPROVAL]
+                                                   Â©Â¦
+                                                   Â¨â€?                                        Step: WAITING, Workflow: WAITING
                                         (Approval: PENDING, Jobs: 0)
-                                                   ©¦
-                         ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©Ø©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-                         ¨‹                                                   ¨‹
-                Human Decides: APPROVE                              Human Decides: REJECT
-                         ©¦                                                   ©¦
+                                                   Â©Â¦
+                         Â©Â°Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Ã˜Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â¤Â©Â´
+                         Â¨â€?                                                  Â¨â€?                Human Decides: APPROVE                              Human Decides: REJECT
+                         Â©Â¦                                                   Â©Â¦
         Approval: APPROVED                                  Approval: REJECTED
         Step: SUCCEEDED                                     Step: BLOCKED
         Workflow: RUNNING                                   Workflow: BLOCKED
         AuditLog: APPROVAL_APPROVED                         AuditLog: APPROVAL_REJECTED
-                         ©¦                                                   ©¦
-                         ¨‹                                                   ¨‹
-               [STEP_EXECUTE: EXECUTION]                           Execution HALTED
-                         ©¦                                         Downstream steps remain PENDING
-                         ¨‹                                         Downstream jobs count: 0
+                         Â©Â¦                                                   Â©Â¦
+                         Â¨â€?                                                  Â¨â€?               [STEP_EXECUTE: EXECUTION]                           Execution HALTED
+                         Â©Â¦                                         Downstream steps remain PENDING
+                         Â¨â€?                                        Downstream jobs count: 0
                [STEP_VERIFY: EXECUTION]
-                         ©¦
-                         ¨‹
-                 Workflow: SUCCEEDED
+                         Â©Â¦
+                         Â¨â€?                 Workflow: SUCCEEDED
 ```
 
 ---
@@ -88,3 +84,11 @@ All approval actions are exposed via the NestJS `@reloop/api` under the `/approv
 - **Actor Identity**: `decidedByUserId` is strictly derived from the authenticated JWT session (`req.user.id`). User-supplied actor IDs are strictly prohibited.
 - **Single Decision Safety**: Attempting to approve or reject an already decided approval returns 409 Conflict.
 - **Race Condition Safety**: Concurrent approve/reject requests serialize via PostgreSQL row locks (`SELECT FOR UPDATE`), guaranteeing that exactly one decision succeeds and the other receives 409 Conflict.
+
+---
+
+## 5. Integration with Recovery Engine (Day 13)
+
+In Day 13's recovery workflows (`RECOVERY_TRACKING_MISSING_APPROVAL`, `RECOVERY_ORDER_MISSING_3PL`, `RECOVERY_SHIPPED_UNFULFILLED`), human approvals gate sensitive external mutations:
+- **Dynamic Previews from Upstream CHECK**: When `WorkflowCoordinator` pauses the workflow at the `APPROVAL` step, it injects the live diagnostic findings from the preceding `CHECK` step directly into `Approval.previewSnapshot`.
+- **Pre-execution Fencing**: The human operator reviews exact state diffs, safety fingerprints, and compensation parameters before any external mutation occurs. Rejection marks the step `REJECTED`, blocks the workflow, and leaves the recovery case safely unresolved without side effects. See [recovery-engine.md](./recovery-engine.md).

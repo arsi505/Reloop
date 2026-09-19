@@ -15,6 +15,8 @@ export interface SchedulerConfig {
   workflowScanBatchSize: number;
   reconciliationScanIntervalMs: number;
   reconciliationScanBatchSize: number;
+  recoveryRouterScanIntervalMs: number;
+  recoveryRouterBatchSize: number;
 }
 
 export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): SchedulerConfig {
@@ -44,6 +46,12 @@ export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): S
   const rawReconcileBatchSize = overrides.reconciliationScanBatchSize ?? (process.env.RECONCILIATION_SCAN_BATCH_SIZE ? parseInt(process.env.RECONCILIATION_SCAN_BATCH_SIZE, 10) : 50);
   const reconciliationScanBatchSize = Number.isFinite(rawReconcileBatchSize) && rawReconcileBatchSize > 0 ? rawReconcileBatchSize : 50;
 
+  const rawRouterInterval = overrides.recoveryRouterScanIntervalMs ?? (process.env.RECOVERY_ROUTER_SCAN_INTERVAL_MS ? parseInt(process.env.RECOVERY_ROUTER_SCAN_INTERVAL_MS, 10) : 2000);
+  const recoveryRouterScanIntervalMs = Number.isFinite(rawRouterInterval) && rawRouterInterval > 0 ? rawRouterInterval : 2000;
+
+  const rawRouterBatchSize = overrides.recoveryRouterBatchSize ?? (process.env.RECOVERY_ROUTER_BATCH_SIZE ? parseInt(process.env.RECOVERY_ROUTER_BATCH_SIZE, 10) : 50);
+  const recoveryRouterBatchSize = Number.isFinite(rawRouterBatchSize) && rawRouterBatchSize > 0 ? rawRouterBatchSize : 50;
+
   const instanceId = overrides.instanceId ?? ('scheduler-' + process.pid + '-' + Math.random().toString(36).substring(2, 9));
 
   return {
@@ -58,6 +66,8 @@ export function loadSchedulerConfig(overrides: Partial<SchedulerConfig> = {}): S
     workflowScanBatchSize,
     reconciliationScanIntervalMs,
     reconciliationScanBatchSize,
+    recoveryRouterScanIntervalMs,
+    recoveryRouterBatchSize,
     instanceId,
   };
 }

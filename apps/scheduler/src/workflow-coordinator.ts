@@ -1,4 +1,4 @@
-﻿import {
+import {
   PrismaClient,
   Prisma,
   Workflow,
@@ -446,7 +446,7 @@ export class WorkflowCoordinator {
 
       if (stepDef.type === 'APPROVAL') {
         // Pauses step in WAITING and creates Approval record idempotently (0 jobs created)
-        await this.pauseStepForApproval(workflow, stepRow, stepDef);
+        await this.pauseStepForApproval(workflow, stepRow, stepDef, stepOutputs);
         stepRow.status = WorkflowStepStatus.WAITING;
         workflow.status = WorkflowStatus.WAITING;
         newlyActivated = true;
@@ -624,8 +624,19 @@ export class WorkflowCoordinator {
     workflow: Workflow,
     step: WorkflowStep,
     stepDef: { key: string; preview?: any },
+    stepOutputs?: Record<string, unknown>,
   ): Promise<void> {
-    const previewJson = stepDef.preview ? JSON.stringify(stepDef.preview) : null;
+    // Dynamic preview from upstream CHECK output if available (Requirement 23)
+    let dynamicPreview = stepDef.preview;
+    if (stepOutputs) {
+      for (const outputVal of Object.values(stepOutputs)) {
+        if (outputVal && typeof outputVal === 'object' && 'preview' in outputVal) {
+          dynamicPreview = (outputVal as any).preview;
+          break;
+        }
+      }
+    }
+    const previewJson = dynamicPreview ? JSON.stringify(dynamicPreview) : null;
 
     await this.prisma.$transaction(async (tx) => {
       // 1. Insert Approval row idempotently
