@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { ExceptionDetailDto } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Skeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -52,6 +53,41 @@ export function ExceptionDetailView({
       setLoading(false);
     }
   }, [exceptionId]);
+
+  const detailRef = React.useRef(detail);
+  detailRef.current = detail;
+
+  const refetchSilently = useCallback(async () => {
+    try {
+      const data = await apiClient.getExceptionDetail(exceptionId);
+      setDetail(data);
+    } catch {
+      // Non-blocking background refetch error
+    }
+  }, [exceptionId]);
+
+  useRealtimeEvent(
+    [
+      'exception.updated',
+      'recovery.updated',
+      'recovery.approval_decided',
+    ],
+    (notification) => {
+      const currentDetail = detailRef.current;
+      const matchesException =
+        notification.resourceId === exceptionId ||
+        (notification.resourceType === 'EXCEPTION' && notification.resourceId === exceptionId);
+      const matchesWorkflow =
+        currentDetail?.workflow?.id && notification.resourceId === currentDetail.workflow.id;
+      const matchesApproval =
+        currentDetail?.approval?.id && notification.resourceId === currentDetail.approval.id;
+
+      if (matchesException || matchesWorkflow || matchesApproval) {
+        refetchSilently();
+      }
+    },
+    300,
+  );
 
   useEffect(() => {
     fetchDetail();

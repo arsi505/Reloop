@@ -10,6 +10,7 @@ import {
   RecoveryLevel,
 } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -94,6 +95,14 @@ export const RecoveriesView: React.FC = () => {
   useEffect(() => {
     fetchRecoveries();
   }, [fetchRecoveries]);
+
+  useRealtimeEvent(
+    ['recovery.updated', 'recovery.approval_decided'],
+    () => {
+      fetchRecoveries();
+    },
+    300,
+  );
 
   const handleFilterChange = (newStatus: WorkflowStatus | '', newLevel: RecoveryLevel | '') => {
     setStatus(newStatus);

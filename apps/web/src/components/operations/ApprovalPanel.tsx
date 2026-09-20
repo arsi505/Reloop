@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { useAuth } from '../../context/auth-context';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { apiClient, ApiError } from '../../lib/api-client';
 import { CheckIcon, AlertTriangleIcon, XIcon, ShieldIcon } from '../icons/Icons';
 import { ApprovalStatus } from '@reloop/contracts';
@@ -14,7 +15,7 @@ export interface ApprovalData {
   requestedAt?: string | Date;
   decidedAt?: string | Date | null;
   expiresAt?: string | Date | null;
-  previewSnapshot?: Record<string, any> | null;
+  previewSnapshot?: Record<string, unknown> | null;
 }
 
 interface ApprovalPanelProps {
@@ -41,7 +42,7 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({
   const isPending = approval.status === 'PENDING';
 
   // Extract structured preview snapshot fields if available
-  const preview = approval.previewSnapshot || {};
+  const preview = (approval.previewSnapshot || {}) as Record<string, any>;
   const problem = preview.problem || preview.targetSystem || 'Commercial state discrepancy';
   const proposedAction = preview.action || preview.proposedAction || 'Execute recovery workflow';
   const why = preview.why || preview.reason || 'Resolves detected desync between primary commerce channels.';
@@ -51,9 +52,19 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({
     : preview.changes && typeof preview.changes === 'object'
     ? Object.entries(preview.changes).map(([k, v]) => `${k}: ${v}`)
     : [];
-  const nonChanges = Array.isArray(preview.nonChanges) ? preview.nonChanges : [];
   const verification = preview.verification || preview.verificationStrategy;
   const risks = Array.isArray(preview.risks) ? preview.risks : [];
+
+  useRealtimeEvent('recovery.approval_decided', (notification) => {
+    if (notification.resourceId === approval.id) {
+      if (showApproveModal || showRejectModal) {
+        setShowApproveModal(false);
+        setShowRejectModal(false);
+        setConflictMessage('This approval was decided concurrently by another operator.');
+      }
+      onDecisionCompleted();
+    }
+  });
 
   const handleApprove = async () => {
     if (isSubmitting) return;

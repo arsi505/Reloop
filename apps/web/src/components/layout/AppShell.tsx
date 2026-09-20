@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/auth-context';
+import { useRealtimeStatus } from '../../context/realtime-context';
 import {
   ReloopLogo,
   DashboardIcon,
@@ -18,6 +19,7 @@ import {
   SearchIcon,
   BellIcon,
   ChevronDownIcon,
+  XIcon,
 } from '../icons/Icons';
 
 export type NavTab =
@@ -43,10 +45,12 @@ export function AppShell({
   openExceptionsCount = 0,
 }: AppShellProps) {
   const { user, organization, role, logout } = useAuth();
+  const realtimeStatus = useRealtimeStatus();
   const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [infoModal, setInfoModal] = useState<{ title: string; desc: string } | null>(null);
 
   const initials = user?.name
     ? user.name
@@ -88,12 +92,31 @@ export function AppShell({
   const secondaryNavItems: {
     id: NavTab;
     label: string;
-    href: string;
+    badgeText: string;
+    description: string;
     icon: React.ComponentType<{ size?: number; className?: string }>;
   }[] = [
-    { id: 'rules', label: 'Rules & Logic', href: '/dashboard', icon: RulesIcon },
-    { id: 'analytics', label: 'Analytics', href: '/dashboard', icon: AnalyticsIcon },
-    { id: 'settings', label: 'Settings', href: '/dashboard', icon: SettingsIcon },
+    {
+      id: 'rules',
+      label: 'Rules & Logic',
+      badgeText: 'Enterprise',
+      description: 'Automated reconciliation rules and match tolerances are provisioned via organization policy contracts.',
+      icon: RulesIcon,
+    },
+    {
+      id: 'analytics',
+      label: 'Analytics',
+      badgeText: 'Coming Soon',
+      description: 'Historical recovery trends, prevented refund cost savings, and SLA metrics launching in upcoming release.',
+      icon: AnalyticsIcon,
+    },
+    {
+      id: 'settings',
+      label: 'Settings',
+      badgeText: 'Config',
+      description: 'Multi-tenant organization security, SSO, and team roles are managed through authenticated admin APIs.',
+      icon: SettingsIcon,
+    },
   ];
 
   const renderSidebarContent = () => (
@@ -184,31 +207,28 @@ export function AppShell({
             Configuration
           </div>
           {secondaryNavItems.map((item) => {
-            const isActive = activeTab === item.id;
             const Icon = item.icon;
             return (
-              <Link
+              <button
                 key={item.id}
-                href={item.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-all group relative ${
-                  isActive
-                    ? 'bg-white text-[#18181b] shadow-subtle border border-[#ececeb]'
-                    : 'text-[#52525b] hover:bg-[#f4f4f5]/80 hover:text-[#18181b]'
-                }`}
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setInfoModal({ title: item.label, desc: item.description });
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-all group relative text-[#52525b] hover:bg-[#f4f4f5]/80 hover:text-[#18181b]"
               >
                 <div className="flex items-center gap-2.5">
                   <Icon
                     size={16}
-                    className={
-                      isActive
-                        ? 'text-[#f95721]'
-                        : 'text-[#71717a] group-hover:text-[#18181b]'
-                    }
+                    className="text-[#71717a] group-hover:text-[#18181b]"
                   />
                   <span>{item.label}</span>
                 </div>
-              </Link>
+                <span className="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-[#f4f4f5] text-[#71717a] border border-[#e4e4e7]">
+                  {item.badgeText}
+                </span>
+              </button>
             );
           })}
         </nav>
@@ -323,6 +343,41 @@ export function AppShell({
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Realtime Live Engine Status Indicator */}
+            <div
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                realtimeStatus === 'CONNECTED'
+                  ? 'bg-[#ecfdf5] text-[#065f46] border-[#a7f3d0]'
+                  : realtimeStatus === 'RECONNECTING'
+                  ? 'bg-[#fffbeb] text-[#92400e] border-[#fde68a]'
+                  : 'bg-[#f4f4f5] text-[#71717a] border-[#e4e4e7]'
+              }`}
+              title={
+                realtimeStatus === 'CONNECTED'
+                  ? 'Realtime engine connected: live operations active'
+                  : realtimeStatus === 'RECONNECTING'
+                  ? 'Realtime engine reconnecting...'
+                  : 'Realtime engine offline'
+              }
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  realtimeStatus === 'CONNECTED'
+                    ? 'bg-[#10b981] animate-pulse'
+                    : realtimeStatus === 'RECONNECTING'
+                    ? 'bg-[#f59e0b] animate-ping'
+                    : 'bg-[#9ca3af]'
+                }`}
+              />
+              <span>
+                {realtimeStatus === 'CONNECTED'
+                  ? 'Live'
+                  : realtimeStatus === 'RECONNECTING'
+                  ? 'Reconnecting'
+                  : 'Offline'}
+              </span>
+            </div>
+
             {/* Search Input Form */}
             <form onSubmit={handleSearchSubmit} className="relative w-44 sm:w-64">
               <SearchIcon
@@ -367,6 +422,34 @@ export function AppShell({
           {children}
         </main>
       </div>
+
+      {/* Informational Enterprise / Upcoming Feature Modal */}
+      {infoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-xl border border-[#ececeb] shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-[#18181b]">{infoModal.title}</h3>
+              <button
+                onClick={() => setInfoModal(null)}
+                className="p-1 rounded-md text-[#71717a] hover:bg-[#f4f4f5] hover:text-[#18181b]"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+            <p className="text-xs text-[#52525b] leading-relaxed">
+              {infoModal.desc}
+            </p>
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setInfoModal(null)}
+                className="px-4 py-1.5 text-xs font-medium bg-[#18181b] text-white rounded-lg hover:bg-[#27272a] transition-colors"
+              >
+                Understood
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

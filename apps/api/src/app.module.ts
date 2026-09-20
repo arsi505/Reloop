@@ -12,6 +12,7 @@ import { ApprovalsModule } from './approvals/approvals.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { OperationsModule } from './operations/operations.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { OperationsModule } from './operations/operations.module';
     ]),
     PrismaModule,
     RedisModule,
+    RealtimeModule,
     HealthModule,
     AuthModule,
     OrganizationsModule,

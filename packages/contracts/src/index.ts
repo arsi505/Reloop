@@ -440,3 +440,5 @@ export interface IntegrationOperationsDetailDto extends IntegrationCardDto {
   activeCasesCount: number;
   safeConfiguration: Record<string, unknown>;
 }
+
+export * from './realtime';

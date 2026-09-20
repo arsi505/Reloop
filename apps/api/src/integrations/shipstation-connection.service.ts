@@ -18,6 +18,7 @@ import {
   encryptCredentials,
 } from '@reloop/connector-shipstation';
 import { StoredShipStationCredential } from '@reloop/integration-sdk';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 
 export interface ConnectShipStationResult {
   success: boolean;
@@ -33,6 +34,7 @@ export class ShipStationConnectionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly realtimePublisher: RealtimePublisher,
   ) {
     this.encryptionKey =
       this.configService.get<string>('integrationEncryptionKey') ||
@@ -165,6 +167,23 @@ export class ShipStationConnectionService {
       },
     });
 
+    // Safe invalidation event broadcast
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'integration.health_changed',
+      resourceId: integrationId,
+      resourceType: 'INTEGRATION',
+      provider: 'SHIPSTATION',
+      status: 'CONNECTED',
+      changedAt: new Date().toISOString(),
+    });
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
+    });
+
     return {
       success: true,
       integrationId,
@@ -243,6 +262,23 @@ export class ShipStationConnectionService {
           provider: 'SHIPSTATION',
         },
       },
+    });
+
+    // Safe invalidation event broadcast
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'integration.health_changed',
+      resourceId: integrationId,
+      resourceType: 'INTEGRATION',
+      provider: 'SHIPSTATION',
+      status: 'CONNECTED',
+      changedAt: new Date().toISOString(),
+    });
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
     });
 
     return {

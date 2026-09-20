@@ -2,24 +2,20 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { IntegrationCardDto, DashboardSummaryDto } from '@reloop/contracts';
+import { IntegrationCardDto } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { MetricCardSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
 import {
   ProviderIcon,
   RefreshIcon,
-  CheckIcon,
-  AlertTriangleIcon,
-  ClockIcon,
-  ShieldIcon,
   ArrowRightIcon,
 } from '../icons/Icons';
 
 export const HealthView: React.FC = () => {
   const [integrations, setIntegrations] = useState<IntegrationCardDto[]>([]);
-  const [summary, setSummary] = useState<DashboardSummaryDto | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<{ status?: number; message?: string } | null>(null);
 
@@ -27,16 +23,14 @@ export const HealthView: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [integrationsRes, summaryRes] = await Promise.all([
-        apiClient.getIntegrations(),
-        apiClient.getDashboardSummary(),
-      ]);
+      const integrationsRes = await apiClient.getIntegrations();
       setIntegrations(integrationsRes);
-      setSummary(summaryRes);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to fetch operational health data';
+      const status = (err && typeof err === 'object' && 'status' in err) ? Number((err as any).status) : 500;
       setError({
-        status: err.status || 500,
-        message: err.message || 'Failed to fetch operational health data',
+        status,
+        message: msg,
       });
     } finally {
       setIsLoading(false);
@@ -47,9 +41,16 @@ export const HealthView: React.FC = () => {
     fetchHealthData();
   }, [fetchHealthData]);
 
+  useRealtimeEvent(
+    ['integration.health_changed', 'integration.sync_completed', 'integration.sync_failed', 'dashboard.changed'],
+    () => {
+      fetchHealthData();
+    },
+    300,
+  );
+
   const healthyCount = integrations.filter((i) => i.health === 'HEALTHY').length;
   const degradedCount = integrations.filter((i) => i.health === 'DEGRADED').length;
-  const disconnectedCount = integrations.filter((i) => i.health === 'DISCONNECTED').length;
 
   return (
     <div className="space-y-6">

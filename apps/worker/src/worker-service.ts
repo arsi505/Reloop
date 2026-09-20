@@ -484,6 +484,22 @@ export class WorkerService {
                   completedAt: new Date(),
                 },
               });
+
+              if (job.organizationId) {
+                try {
+                  const eventPayload = JSON.stringify({
+                    organizationId: job.organizationId,
+                    eventType: 'recovery.updated',
+                    resourceId: job.workflowId || job.workflowStepId,
+                    resourceType: 'RECOVERY',
+                    status: 'SUCCEEDED',
+                    changedAt: new Date().toISOString(),
+                  });
+                  await this.commandRedis.publish('reloop:realtime:events', eventPayload);
+                } catch {
+                  // Non-blocking invalidation publish
+                }
+              }
             } catch (stepErr) {
               console.warn(
                 `[Reloop Worker] Failed updating workflowStep ${job.workflowStepId} to SUCCEEDED (will be reconciled by coordinator):`,
@@ -493,6 +509,26 @@ export class WorkerService {
           }
 
           // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK
+          if (job.organizationId && (job.type === 'SHOPIFY_SYNC_ORDERS' || job.type === 'SHIPSTATION_SYNC_SHIPMENTS')) {
+            try {
+              const provider = job.type === 'SHOPIFY_SYNC_ORDERS' ? 'SHOPIFY' : 'SHIPSTATION';
+              const payloadObj = (job.payload as Record<string, any>) || {};
+              const integrationId = payloadObj.integrationId || (result as any)?.integrationId;
+              const syncEvent = JSON.stringify({
+                organizationId: job.organizationId,
+                eventType: 'integration.sync_completed',
+                resourceId: integrationId,
+                resourceType: 'INTEGRATION',
+                provider,
+                status: 'COMPLETED',
+                changedAt: new Date().toISOString(),
+              });
+              await this.commandRedis.publish('reloop:realtime:events', syncEvent);
+            } catch {
+              // Non-blocking invalidation publish
+            }
+          }
+
           await this.commandRedis.xack(
             this.config.jobStreamKey,
             this.config.jobConsumerGroup,
@@ -573,6 +609,28 @@ export class WorkerService {
                   stepErr,
                 );
               });
+          }
+
+          // Emit integration.sync_failed on terminal sync failure
+          if (isTerminalFailure && job.organizationId && (job.type === 'SHOPIFY_SYNC_ORDERS' || job.type === 'SHIPSTATION_SYNC_SHIPMENTS')) {
+            try {
+              const provider = job.type === 'SHOPIFY_SYNC_ORDERS' ? 'SHOPIFY' : 'SHIPSTATION';
+              const payloadObj = (job.payload as Record<string, any>) || {};
+              const integrationId = payloadObj.integrationId;
+              const syncFailedEvent = JSON.stringify({
+                organizationId: job.organizationId,
+                eventType: 'integration.sync_failed',
+                resourceId: integrationId,
+                resourceType: 'INTEGRATION',
+                provider,
+                status: 'FAILED',
+                reason: classified?.code || 'SYNC_FAILED',
+                changedAt: new Date().toISOString(),
+              });
+              await this.commandRedis.publish('reloop:realtime:events', syncFailedEvent);
+            } catch {
+              // Non-blocking invalidation publish
+            }
           }
 
           // Core Rule: POSTGRESQL COMMIT FIRST, THEN XACK

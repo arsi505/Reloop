@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { RecoveryDetailDto, WorkflowStatus } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { ErrorState } from '../ui/ErrorState';
 import { MetricCardSkeleton } from '../ui/Skeleton';
@@ -14,7 +15,6 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   RefreshIcon,
-  ShieldIcon,
   ClockIcon,
 } from '../icons/Icons';
 
@@ -23,7 +23,6 @@ interface RecoveryDetailViewProps {
 }
 
 export const RecoveryDetailView: React.FC<RecoveryDetailViewProps> = ({ id }) => {
-  const router = useRouter();
   const [detail, setDetail] = useState<RecoveryDetailDto | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -39,11 +38,13 @@ export const RecoveryDetailView: React.FC<RecoveryDetailViewProps> = ({ id }) =>
         const res = await apiClient.getRecoveryDetail(id);
         setDetail(res);
         setError(null);
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isBackgroundPoll) {
+          const msg = err instanceof Error ? err.message : 'Failed to load recovery details';
+          const status = (err && typeof err === 'object' && 'status' in err) ? Number((err as any).status) : 500;
           setError({
-            status: err.status || 500,
-            message: err.message || 'Failed to load recovery details',
+            status,
+            message: msg,
           });
         }
       } finally {
@@ -82,6 +83,16 @@ export const RecoveryDetailView: React.FC<RecoveryDetailViewProps> = ({ id }) =>
       }
     };
   }, [detail, fetchDetail]);
+
+  useRealtimeEvent(
+    ['recovery.updated', 'recovery.approval_decided'],
+    (notification) => {
+      if (!notification.resourceId || notification.resourceId === id || notification.resourceId === detail?.recoveryCaseId) {
+        fetchDetail(true);
+      }
+    },
+    150,
+  );
 
   if (isLoading) {
     return (

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { IntegrationCardDto, IntegrationProvider } from '@reloop/contracts';
 import { apiClient, ApiError } from '../../lib/api-client';
 import { useAuth } from '../../context/auth-context';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -75,6 +76,10 @@ export const IntegrationsView: React.FC = () => {
     fetchIntegrations();
   }, [fetchIntegrations]);
 
+  useRealtimeEvent(['integration.health_changed', 'integration.sync_completed', 'integration.sync_failed'], () => {
+    fetchIntegrations();
+  });
+
   // Handle Connect Shopify
   const handleConnectShopify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,6 +129,7 @@ export const IntegrationsView: React.FC = () => {
       await fetchIntegrations();
     } catch (err: any) {
       setShipstationError(err.message || 'Failed to connect ShipStation. Verify API key.');
+      await fetchIntegrations();
     } finally {
       setIsSubmitting(false);
     }
@@ -148,6 +154,7 @@ export const IntegrationsView: React.FC = () => {
       await fetchIntegrations();
     } catch (err: any) {
       setReplacementError(err.message || 'Failed to validate replacement API key.');
+      await fetchIntegrations();
     } finally {
       setIsSubmitting(false);
     }
@@ -164,6 +171,7 @@ export const IntegrationsView: React.FC = () => {
       await fetchIntegrations();
     } catch (err: any) {
       showToast('error', err.message || 'Failed to disconnect integration.');
+      await fetchIntegrations();
     } finally {
       setIsSubmitting(false);
     }

@@ -12,10 +12,14 @@ import {
   WorkflowStatus,
   WorkflowStepStatus,
 } from '@reloop/database';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 
 @Injectable()
 export class ApprovalsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtimePublisher: RealtimePublisher,
+  ) {}
 
   async listApprovals(organizationId: string, status?: ApprovalStatus) {
     return this.prisma.approval.findMany({
@@ -103,7 +107,7 @@ export class ApprovalsService {
     actorUserId: string,
     note?: string,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Fetch approval with tenant scoping and linked workflow
       const approval = await tx.approval.findFirst({
         where: { id, organizationId },
@@ -253,6 +257,37 @@ export class ApprovalsService {
         },
       });
     });
+
+    // Post-commit safe realtime notification fanout (invalidation signals only)
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'recovery.approval_decided',
+      resourceId: id,
+      resourceType: 'APPROVAL',
+      status: 'APPROVED',
+      changedAt: new Date().toISOString(),
+      reason: note?.trim() || undefined,
+    });
+
+    if (result?.recoveryCaseId) {
+      await this.realtimePublisher.publish({
+        organizationId,
+        eventType: 'recovery.updated',
+        resourceId: result.recoveryCaseId,
+        resourceType: 'RECOVERY',
+        status: 'RUNNING',
+        changedAt: new Date().toISOString(),
+      });
+    }
+
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
+    });
+
+    return result;
   }
 
   async rejectApproval(
@@ -266,7 +301,7 @@ export class ApprovalsService {
       throw new BadRequestException('Reason must not be empty');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Fetch approval with tenant scoping and linked workflow
       const approval = await tx.approval.findFirst({
         where: { id, organizationId },
@@ -416,5 +451,36 @@ export class ApprovalsService {
         },
       });
     });
+
+    // Post-commit safe realtime notification fanout (invalidation signals only)
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'recovery.approval_decided',
+      resourceId: id,
+      resourceType: 'APPROVAL',
+      status: 'REJECTED',
+      changedAt: new Date().toISOString(),
+      reason: trimmedReason,
+    });
+
+    if (result?.recoveryCaseId) {
+      await this.realtimePublisher.publish({
+        organizationId,
+        eventType: 'recovery.updated',
+        resourceId: result.recoveryCaseId,
+        resourceType: 'RECOVERY',
+        status: 'BLOCKED',
+        changedAt: new Date().toISOString(),
+      });
+    }
+
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
+    });
+
+    return result;
   }
 }

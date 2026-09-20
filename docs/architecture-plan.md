@@ -212,3 +212,13 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Deterministic Integration Health**: Provider health (`HEALTHY`, `DEGRADED`, `DISCONNECTED`, `SYNCING`) is derived deterministically from durable records. Connected-but-failing sync pipelines are marked `DEGRADED`, preventing false healthy indicators.
 - **Flight Recorder Timelines**: Chronological timelines reconstruct execution facts strictly from durable database records (`RecoveryCase`, `Workflow`, `WorkflowStep`, `Approval`, `JobAttempt`).
 - **Standardized Pagination & RBAC**: Consistent `{ items, page, pageSize, total, totalPages }` contract across all list endpoints with query validation. `OWNER`, `ADMIN`, `OPERATOR`, and `VIEWER` roles possess read access. See [operations-api.md](./operations-api.md).
+
+---
+
+## 16. Realtime Operations & Invalidation Architecture (Day 20)
+
+- **Authoritative First, Invalidation Signal Second**: Realtime events are strictly invalidation notifications emitted after row-locked PostgreSQL transactions commit. WebSockets are never treated as a second source of truth; clients query authoritative REST endpoints upon receiving signals.
+- **Physical Redis Isolation**: Reloop strictly separates durable execution queues (`reloop:jobs:ready` via Redis Streams) from ephemeral realtime broadcasts (`reloop:realtime:events` via Redis Pub/Sub). Failures in realtime fanout never corrupt durable job streams.
+- **JWT Handshake Authentication & Tenant Room Binding**: Sockets authenticate via JWT in handshake authorization payload (`auth.token`). The gateway verifies active organization membership in PostgreSQL and binds sockets strictly to `org:<organizationId>`. Cross-tenant event leakage is architecturally impossible.
+- **Zero Client Mutations**: Client-to-server business mutation commands over WebSockets are systematically rejected. All operations (Approve, Reject, Connect, Disconnect) are performed exclusively via authenticated REST routes.
+- **Multi-Instance Compatibility**: API servers subscribe to Redis Pub/Sub channels on startup, ensuring that worker-driven step completions, webhook reconciliation cases, and admin actions propagate instantly to all active socket sessions across server instances. See [realtime-architecture.md](./realtime-architecture.md).

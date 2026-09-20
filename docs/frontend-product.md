@@ -161,3 +161,24 @@ The frontend imports contracts directly from `@reloop/contracts`:
 - Consumes real backend adapter statuses and sync health metrics from `GET /integrations` and `GET /dashboard/summary`.
 - Operational metrics cards (Total Integrations, Healthy Adapters, Degraded Adapters, Safety Guardrails).
 - Real-time provider adapter connectivity and rate-limiting status table with deep-links to integration inspection views.
+
+---
+
+## 7. Realtime Operations & Product Polish (Day 20)
+
+### 7.1 Realtime Operations Philosophy & Signals Model
+- **Invalidation Only:** WebSockets in Reloop transmit lightweight change notifications (`RealtimeNotification`), never authoritative business state.
+- **REST as Single Truth:** Upon receipt of invalidation events, views execute fresh typed queries against authoritative REST endpoints.
+- **Strict Tenant Isolation:** Sockets authenticate via JWT in `handshake.auth.token`, verify active database organization membership, and join server-derived `org:<organizationId>` rooms.
+- **Zero Client Mutations:** Inbound client mutation commands over WebSockets are systematically rejected.
+
+### 7.2 Live Refetching Coordination
+- `DashboardView`: Reacts to `dashboard.changed`, `recovery.*`, and `exception.*` with 300ms burst coalescing.
+- `ExceptionsView`: Live refreshes on `exception.created` and `exception.updated`.
+- `RecoveriesView` & `RecoveryDetailView`: Live updates on `recovery.updated` and `recovery.approval_decided`. Reduces polling to background safety net.
+- `ApprovalPanel`: Concurrently synchronizes approval and rejection decisions across multiple operator tabs and windows, preventing double-decision attempts and stale modal states.
+- `IntegrationsView` & `HealthView`: Instant status reflections upon provider connection, credential rotation, and disconnection.
+
+### 7.3 Navigation & Production Polish
+- **Header Live Status Indicator:** `AppShell` header features a real-time engine connectivity badge (`Live`, `Reconnecting`, `Offline`) with live socket lifecycle tracking.
+- **Inactive Feature Cleanliness:** Unimplemented configuration routes (`Rules & Logic`, `Analytics`, `Settings`) render informational enterprise tags (`Enterprise`, `Coming Soon`, `Config`) and trigger modal explanations rather than navigating to broken dummy routes or displaying mock data.

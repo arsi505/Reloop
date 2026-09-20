@@ -4,6 +4,7 @@ import { BadRequestException, ConflictException, UnauthorizedException } from '@
 import * as crypto from 'crypto';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 import { decryptCredentials } from '@reloop/connector-shopify';
 
 describe('ShopifyOAuthService', () => {
@@ -47,6 +48,12 @@ describe('ShopifyOAuthService', () => {
               if (key === 'integrationEncryptionKey') return mockMasterKey;
               return undefined;
             }),
+          },
+        },
+        {
+          provide: RealtimePublisher,
+          useValue: {
+            publish: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],

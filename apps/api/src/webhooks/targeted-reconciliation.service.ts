@@ -15,6 +15,7 @@ import {
   ReconciliationFinding,
 } from '@reloop/reconciliation-core';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -23,7 +24,10 @@ const UUID_REGEX =
 export class TargetedReconciliationService {
   private readonly logger = new Logger(TargetedReconciliationService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtimePublisher: RealtimePublisher,
+  ) {}
 
   /**
    * Persists reconciliation findings as RecoveryCase instances using transactional advisory locking.
@@ -44,13 +48,13 @@ export class TargetedReconciliationService {
         ? externalOrderId
         : null;
 
-    const persistedCases: RecoveryCase[] = [];
+    const persistedResults: { recoveryCase: RecoveryCase; isExisting: boolean }[] = [];
 
     for (const finding of findings) {
       const orderNumber = finding.orderIdentity.orderNumber || 'system';
       const dedupeKey = `${orderNumber}:${finding.category}`;
 
-      const recoveryCase = await this.prisma.$transaction(async (tx) => {
+      const res = await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtext('reloop:case:' || ${organizationId} || ':' || ${dedupeKey}))
         `;
@@ -66,7 +70,7 @@ export class TargetedReconciliationService {
         });
 
         if (existingActive) {
-          return tx.recoveryCase.update({
+          const updated = await tx.recoveryCase.update({
             where: { id: existingActive.id },
             data: {
               summary: finding.summary,
@@ -75,9 +79,10 @@ export class TargetedReconciliationService {
               updatedAt: new Date(),
             },
           });
+          return { recoveryCase: updated, isExisting: true };
         }
 
-        return tx.recoveryCase.create({
+        const created = await tx.recoveryCase.create({
           data: {
             organizationId,
             externalOrderId: validExternalOrderId,
@@ -90,12 +95,33 @@ export class TargetedReconciliationService {
             detectedAt: new Date(),
           },
         });
+        return { recoveryCase: created, isExisting: false };
       });
 
-      persistedCases.push(recoveryCase);
+      persistedResults.push(res);
     }
 
-    return persistedCases;
+    if (persistedResults.length > 0) {
+      for (const { recoveryCase: c, isExisting } of persistedResults) {
+        await this.realtimePublisher.publish({
+          organizationId,
+          eventType: isExisting ? 'exception.updated' : 'exception.created',
+          resourceId: c.id,
+          resourceType: 'EXCEPTION',
+          orderId: c.externalOrderId || validExternalOrderId || undefined,
+          status: c.status,
+          changedAt: new Date().toISOString(),
+        });
+      }
+      await this.realtimePublisher.publish({
+        organizationId,
+        eventType: 'dashboard.changed',
+        resourceType: 'DASHBOARD',
+        changedAt: new Date().toISOString(),
+      });
+    }
+
+    return persistedResults.map((p) => p.recoveryCase);
   }
 
   /**

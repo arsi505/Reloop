@@ -12,6 +12,7 @@ import {
   IntegrationProvider,
 } from '@reloop/contracts';
 import { apiClient, ExceptionsQuery } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -116,7 +117,6 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
     }
   }, [page, pageSize, status, recoveryLevel, caseType, provider, debouncedSearch]);
 
-  // Fetch when filters or page change
   useEffect(() => {
     fetchExceptions();
     updateUrlParams({
@@ -128,6 +128,14 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
       search: debouncedSearch || undefined,
     });
   }, [fetchExceptions, page, status, recoveryLevel, caseType, provider, debouncedSearch, updateUrlParams]);
+
+  useRealtimeEvent(
+    ['exception.created', 'exception.updated', 'recovery.updated', 'recovery.approval_decided'],
+    () => {
+      fetchExceptions();
+    },
+    300,
+  );
 
   const hasActiveFilters =
     status !== '' ||

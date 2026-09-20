@@ -10,6 +10,7 @@ import {
   RecoveryCaseStatus,
 } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { MetricCardSkeleton, TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -94,6 +95,30 @@ export function DashboardView({
   useEffect(() => {
     fetchQueue(queueFilter);
   }, [fetchQueue, queueFilter]);
+
+  useRealtimeEvent(
+    [
+      'dashboard.changed',
+      'exception.created',
+      'exception.updated',
+      'recovery.updated',
+      'recovery.approval_decided',
+      'integration.health_changed',
+    ],
+    () => {
+      Promise.all([
+        apiClient.getDashboardSummary(),
+        apiClient.getIntegrations().catch(() => [] as IntegrationCardDto[]),
+      ])
+        .then(([s, i]) => {
+          setSummary(s);
+          setIntegrations(i);
+        })
+        .catch(() => {});
+      fetchQueue(queueFilter);
+    },
+    300,
+  );
 
   if (summaryError) {
     return (

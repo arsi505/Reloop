@@ -30,6 +30,7 @@ import {
   IntegrationCardDto,
   IntegrationOperationsDetailDto,
 } from '../operations/dto/integrations-operations.dto';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -41,6 +42,7 @@ export class IntegrationsController {
     private readonly shopifySync: ShopifySyncService,
     private readonly shipstationConnection: ShipStationConnectionService,
     private readonly integrationHealth: IntegrationHealthService,
+    private readonly realtimePublisher: RealtimePublisher,
   ) {}
 
   /**
@@ -218,6 +220,23 @@ export class IntegrationsController {
           shopDomain: integration.shopDomain,
         },
       },
+    });
+
+    // Safe invalidation event broadcast
+    await this.realtimePublisher.publish({
+      organizationId: user.organizationId,
+      eventType: 'integration.health_changed',
+      resourceId: id,
+      resourceType: 'INTEGRATION',
+      provider: integration.provider,
+      status: 'DISCONNECTED',
+      changedAt: new Date().toISOString(),
+    });
+    await this.realtimePublisher.publish({
+      organizationId: user.organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
     });
 
     return {

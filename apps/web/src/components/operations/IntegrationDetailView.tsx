@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { IntegrationOperationsDetailDto } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../context/auth-context';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { MetricCardSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -68,6 +69,16 @@ export const IntegrationDetailView: React.FC<IntegrationDetailViewProps> = ({ id
     fetchDetail();
   }, [fetchDetail]);
 
+  useRealtimeEvent(
+    ['integration.health_changed', 'integration.sync_completed', 'integration.sync_failed'],
+    (notification) => {
+      if (!notification.resourceId || notification.resourceId === id) {
+        fetchDetail();
+      }
+    },
+    300,
+  );
+
   const handleDisconnect = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
@@ -78,6 +89,7 @@ export const IntegrationDetailView: React.FC<IntegrationDetailViewProps> = ({ id
       await fetchDetail();
     } catch (err: any) {
       showToast('error', err.message || 'Failed to disconnect integration.');
+      await fetchDetail();
     } finally {
       setIsSubmitting(false);
     }
@@ -101,6 +113,7 @@ export const IntegrationDetailView: React.FC<IntegrationDetailViewProps> = ({ id
       await fetchDetail();
     } catch (err: any) {
       setReplacementError(err.message || 'Validation failed for replacement key.');
+      await fetchDetail();
     } finally {
       setIsSubmitting(false);
     }

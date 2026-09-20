@@ -13,14 +13,25 @@ import {
   encryptCredentials,
   ShopifyClient,
 } from '@reloop/connector-shopify';
+import { RealtimePublisher } from '../realtime/realtime.publisher';
 
 export interface ShopifyTokenResponse {
   access_token: string;
   scope: string;
   expires_in?: number;
+  associated_user_scope?: string;
+  associated_user?: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    account_owner: boolean;
+    locale: string;
+    collaborator: boolean;
+    email_verified: boolean;
+  };
   refresh_token?: string;
   refresh_token_expires_in?: number;
-  associated_user?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -35,6 +46,7 @@ export class ShopifyOAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly realtimePublisher: RealtimePublisher,
   ) {
     this.clientId = this.configService.get<string>('shopifyClientId') || '';
     this.clientSecret = this.configService.get<string>('shopifyClientSecret') || '';
@@ -377,6 +389,23 @@ export class ShopifyOAuthService {
         idempotencyKey: `shopify_initial_sync_${integration.id}`,
         nextRunAt: new Date(),
       },
+    });
+
+    // Safe invalidation event broadcast
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'integration.health_changed',
+      resourceId: integration.id,
+      resourceType: 'INTEGRATION',
+      provider: 'SHOPIFY',
+      status: 'CONNECTED',
+      changedAt: new Date().toISOString(),
+    });
+    await this.realtimePublisher.publish({
+      organizationId,
+      eventType: 'dashboard.changed',
+      resourceType: 'DASHBOARD',
+      changedAt: new Date().toISOString(),
     });
 
     return {

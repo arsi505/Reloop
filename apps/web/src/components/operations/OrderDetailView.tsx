@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { OrderDetailDto } from '@reloop/contracts';
 import { apiClient } from '../../lib/api-client';
+import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Skeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
@@ -48,6 +49,34 @@ export function OrderDetailView({
       setLoading(false);
     }
   }, [orderId]);
+
+  const refetchSilently = useCallback(async () => {
+    try {
+      const data = await apiClient.getOrderDetail(orderId);
+      setDetail(data);
+    } catch {
+      // Non-blocking background refetch error
+    }
+  }, [orderId]);
+
+  useRealtimeEvent(
+    [
+      'exception.created',
+      'exception.updated',
+      'recovery.updated',
+      'recovery.approval_decided',
+    ],
+    (notification) => {
+      const matchesOrder =
+        notification.orderId === orderId ||
+        (notification.resourceType === 'ORDER' && notification.resourceId === orderId);
+
+      if (matchesOrder) {
+        refetchSilently();
+      }
+    },
+    300,
+  );
 
   useEffect(() => {
     fetchDetail();
