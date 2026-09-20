@@ -71,6 +71,17 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
   return ongoingRefreshPromise;
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public data?: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function fetchWithAuth<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -108,8 +119,10 @@ export async function fetchWithAuth<T>(
 
   if (!response.ok) {
     let errorMessage = `Request failed with status ${response.status}`;
+    let errorData: unknown = null;
     try {
       const errorBody = await response.json();
+      errorData = errorBody;
       if (Array.isArray(errorBody.message)) {
         errorMessage = errorBody.message.join(', ');
       } else if (errorBody.message) {
@@ -118,7 +131,7 @@ export async function fetchWithAuth<T>(
     } catch {
       // ignore json parse error
     }
-    throw new Error(errorMessage);
+    throw new ApiError(errorMessage, response.status, errorData);
   }
 
   return response.json() as Promise<T>;
@@ -291,5 +304,87 @@ export const apiClient = {
 
   async getIntegrationDetail(id: string): Promise<IntegrationOperationsDetailDto> {
     return fetchWithAuth<IntegrationOperationsDetailDto>(`/integrations/${encodeURIComponent(id)}`);
+  },
+
+  // ==========================================
+  // Approvals Actions (Day 11 API)
+  // ==========================================
+
+  async approveApproval(
+    id: string,
+    note?: string,
+  ): Promise<{ success?: boolean; message?: string; [key: string]: unknown }> {
+    return fetchWithAuth<{ success?: boolean; message?: string; [key: string]: unknown }>(
+      `/approvals/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ note: note || undefined }),
+      },
+    );
+  },
+
+  async rejectApproval(
+    id: string,
+    reason: string,
+  ): Promise<{ success?: boolean; message?: string; [key: string]: unknown }> {
+    return fetchWithAuth<{ success?: boolean; message?: string; [key: string]: unknown }>(
+      `/approvals/${encodeURIComponent(id)}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    );
+  },
+
+  // ==========================================
+  // Integration Connection Actions (Day 15/16 API)
+  // ==========================================
+
+  async connectShopify(
+    shop: string,
+  ): Promise<{ authorizationUrl: string; state: string; shopDomain: string }> {
+    return fetchWithAuth<{ authorizationUrl: string; state: string; shopDomain: string }>(
+      '/integrations/shopify/connect',
+      {
+        method: 'POST',
+        body: JSON.stringify({ shop }),
+      },
+    );
+  },
+
+  async connectShipStation(
+    apiKey: string,
+  ): Promise<{ success: boolean; integrationId: string; totalShipments: number }> {
+    return fetchWithAuth<{ success: boolean; integrationId: string; totalShipments: number }>(
+      '/integrations/shipstation/connect',
+      {
+        method: 'POST',
+        body: JSON.stringify({ apiKey }),
+      },
+    );
+  },
+
+  async replaceShipStationCredentials(
+    id: string,
+    apiKey: string,
+  ): Promise<{ success: boolean; integrationId: string; totalShipments: number }> {
+    return fetchWithAuth<{ success: boolean; integrationId: string; totalShipments: number }>(
+      `/integrations/shipstation/${encodeURIComponent(id)}/credentials/replace`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ apiKey }),
+      },
+    );
+  },
+
+  async disconnectIntegration(
+    id: string,
+  ): Promise<{ success: boolean; message: string; integrationId: string }> {
+    return fetchWithAuth<{ success: boolean; message: string; integrationId: string }>(
+      `/integrations/${encodeURIComponent(id)}/disconnect`,
+      {
+        method: 'POST',
+      },
+    );
   },
 };

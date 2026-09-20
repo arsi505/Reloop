@@ -110,11 +110,15 @@ export class IntegrationHealthService {
 
     const rawConfig = (integration.configuration as Record<string, any>) || {};
     const safeConfiguration: Record<string, any> = {
-      scopes: rawConfig.scopes,
-      shopDomain: rawConfig.shopDomain || integration.shopDomain,
-      lastSuccessfulSyncWatermark: rawConfig.lastSuccessfulSyncWatermark,
-      lastWatermark: rawConfig.lastWatermark,
+      shopDomain: rawConfig.shopDomain || integration.shopDomain || undefined,
+      provider: integration.provider,
+      mode: integration.mode,
+      syncWatermark: rawConfig.lastSuccessfulSyncWatermark || rawConfig.lastWatermark || null,
       syncIntervalMinutes: rawConfig.syncIntervalMinutes,
+      safeCapabilityFlags: {
+        readMonitored: true,
+        mutationsDisabled: true,
+      },
     };
 
     return {
@@ -309,6 +313,9 @@ export class IntegrationHealthService {
   private getSafeIdentifier(integration: Integration): string {
     if (integration.provider === IntegrationProvider.SHOPIFY && integration.shopDomain) {
       return integration.shopDomain;
+    }
+    if (integration.provider === IntegrationProvider.SHIPSTATION) {
+      return integration.status === 'CONNECTED' ? 'Credential configured' : 'Not configured';
     }
     return integration.name;
   }

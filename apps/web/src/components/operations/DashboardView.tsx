@@ -466,7 +466,9 @@ export function DashboardView({
                             {integ.name}
                           </p>
                           <p className="text-[10px] text-[#71717a] font-mono">
-                            {integ.safeIdentifier}
+                            {integ.provider === 'SHIPSTATION'
+                              ? (integ.status === 'CONNECTED' ? 'Credential configured' : 'Not configured')
+                              : integ.safeIdentifier}
                           </p>
                         </div>
                       </div>

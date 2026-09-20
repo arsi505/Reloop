@@ -91,9 +91,12 @@ export type RecoveryCaseStatus =
 export type WorkflowStatus =
   | 'PENDING'
   | 'RUNNING'
+  | 'WAITING'
   | 'WAITING_FOR_INPUT'
+  | 'SUCCEEDED'
   | 'COMPLETED'
   | 'FAILED'
+  | 'BLOCKED'
   | 'CANCELLED';
 
 export type IntegrationProvider = 'SHOPIFY' | 'SHIPSTATION' | 'GENERIC_3PL';
@@ -226,7 +229,7 @@ export interface ExceptionDetailWorkflowDto {
 
 export interface ExceptionDetailApprovalDto {
   id: string;
-  status: string;
+  status: ApprovalStatus | string;
   reason: string | null;
   requestedAt: string;
   decidedAt: string | null;

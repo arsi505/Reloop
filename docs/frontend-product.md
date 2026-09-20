@@ -85,3 +85,79 @@ The frontend imports contracts directly from `@reloop/contracts`:
 3. **Execution Guardrails:**
    - Read-only protection: Blocked exceptions and approval gates show policy warnings and previews without executing unverified state mutations.
    - Preserves Day 16 ShipStation semantics: ShipStation records represent shipment & label entities rather than authoritative physical delivery.
+
+---
+
+## 6. Recoveries, Approval Interactions & Integrations (Day 19)
+
+### 6.1 Recoveries Queue (`/recoveries`)
+- **Route:** `apps/web/src/app/recoveries/page.tsx`
+- **Component:** `RecoveriesView` (`apps/web/src/components/operations/RecoveriesView.tsx`)
+- Consumes `GET /recoveries` with server-side pagination, 300ms debounced search, `status`, and `recoveryLevel` filters.
+- Displays case identifiers, logical order links, problem summary, template key with version, recovery level badge, approval status badge, workflow status badge, start/completion times, and direct link to Flight Recorder.
+
+### 6.2 Recovery Flight Recorder & Durable Timeline (`/recoveries/[id]`)
+- **Route:** `apps/web/src/app/recoveries/[id]/page.tsx`
+- **Component:** `RecoveryDetailView` (`apps/web/src/components/operations/RecoveryDetailView.tsx`) & `FlightRecorderTimeline` (`apps/web/src/components/operations/FlightRecorderTimeline.tsx`)
+- Consumes `GET /recoveries/:id`.
+- Problem summary banner, duration badge, associated external order link.
+- **Flight Recorder Timeline:**
+  - Consumes durable backend `timeline: TimelineEntryDto[]` without synthesising client events.
+  - Visually distinguishes phase types: `CHECK` (indigo), `EXECUTE` (amber), `VERIFY` (teal/emerald).
+  - Explicitly separates execution success from verification success (a successful API push is distinct from post-mutation verification confirmation).
+  - Verified Resolution card renders when verification succeeds; alerts render when verification fails.
+  - Collapsible event metadata disclosures display structured system/actor audit context.
+  - Automatically polls every 4 seconds when workflow status is `RUNNING` or `WAITING`.
+
+### 6.3 Operator Approval & Rejection Interactions
+- **Component:** `ApprovalPanel` (`apps/web/src/components/operations/ApprovalPanel.tsx`)
+- Reusable across both Recovery Detail (`/recoveries/[id]`) and Exception Detail (`/exceptions/[id]`).
+- **Immutable Preview Snapshot:** Renders proposed mutations, target systems, rationale, and non-changes safely from immutable backend snapshots.
+- **Role Gating:**
+  - `OWNER`, `ADMIN`, and `OPERATOR` roles are permitted to decide approvals.
+  - `VIEWER` role is presented with a read-only policy explanation notice and decision controls are disabled/hidden.
+- **Approve Flow:**
+  - Accessible via "Approve Recovery" button.
+  - Modal with clear explanation of downstream execution impact.
+  - Optional operator context/audit note.
+  - Dispatches `POST /approvals/:id/approve` with double-submit protection.
+- **Reject Flow:**
+  - Accessible via "Reject Recovery" button.
+  - Modal requiring an explicit rejection reason (enforced with client and server validation).
+  - Permanent workflow halt notice: halts workflow, transitions step to terminal, prevents downstream mutations.
+  - Dispatches `POST /approvals/:id/reject`.
+- **409 Conflict Handling:**
+  - If another operator or worker already decided or transitioned the approval, a clear amber notification banner is rendered (`"Approval State Updated: This approval has already been decided by another operator or is no longer pending."`).
+  - Automatically triggers state refetch to synchronize authoritative backend data without full page reload.
+
+### 6.4 Integrations Hub & Provider Management (`/integrations`)
+- **Route:** `apps/web/src/app/integrations/page.tsx`
+- **Component:** `IntegrationsView` (`apps/web/src/components/operations/IntegrationsView.tsx`)
+- Consumes `GET /integrations`.
+- Displays connected providers (Shopify, ShipStation) with health badges (`HEALTHY`, `DEGRADED`, `DISCONNECTED`, `SYNCING`), safe account identifiers, read-only mode tags, last sync timestamps, and sanitized error summaries.
+- **Connect Shopify Modal:**
+  - Validates canonical domain format (rejecting paths, ports, IPs, or non-Shopify domains).
+  - Dispatches `POST /integrations/shopify/connect` and redirects to provider OAuth flow.
+- **Connect ShipStation Modal:**
+  - Password-masked input field for API Key.
+  - Key is sent directly via `POST /integrations/shipstation/connect` and cleared immediately from memory upon submission. Zero plaintext persistence in browser storage.
+- **Replace ShipStation Key Modal:**
+  - Allows credential rotation via `POST /integrations/shipstation/:id/credentials/replace`.
+- **Disconnect Modal:**
+  - Explains that past synchronization history, audit logs, and recovery cases are permanently retained.
+  - Dispatches `POST /integrations/:id/disconnect`.
+
+### 6.5 Integration Detail View (`/integrations/[id]`)
+- **Route:** `apps/web/src/app/integrations/[id]/page.tsx`
+- **Component:** `IntegrationDetailView` (`apps/web/src/components/operations/IntegrationDetailView.tsx`)
+- Consumes `GET /integrations/:id`.
+- 4-stat metric overview (last sync, active incidents, historical cases, capability boundary).
+- Recent synchronization jobs table showing job type, status, attempts, enqueued, and completed timestamps.
+- Safe configuration viewer rendering sanitized scopes, store domain, and sync intervals without leaking secrets.
+
+### 6.6 System Health Dashboard (`/health`)
+- **Route:** `apps/web/src/app/health/page.tsx`
+- **Component:** `HealthView` (`apps/web/src/components/operations/HealthView.tsx`)
+- Consumes real backend adapter statuses and sync health metrics from `GET /integrations` and `GET /dashboard/summary`.
+- Operational metrics cards (Total Integrations, Healthy Adapters, Degraded Adapters, Safety Guardrails).
+- Real-time provider adapter connectivity and rate-limiting status table with deep-links to integration inspection views.

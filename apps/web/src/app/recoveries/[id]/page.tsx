@@ -1,18 +1,18 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '../../context/auth-context';
-import { apiClient } from '../../lib/api-client';
-import { AppShell } from '../../components/layout/AppShell';
-import { DashboardView } from '../../components/operations/DashboardView';
-import { RecoveryDetailDrawer } from '../../components/operations/RecoveryDetailDrawer';
+import { useRouter, useParams } from 'next/navigation';
+import { useAuth } from '../../../context/auth-context';
+import { apiClient } from '../../../lib/api-client';
+import { AppShell } from '../../../components/layout/AppShell';
+import { RecoveryDetailView } from '../../../components/operations/RecoveryDetailView';
 
-export default function DashboardRoutePage() {
+export default function RecoveryDetailPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
+  const params = useParams();
+  const id = params?.id as string;
   const [openExceptionsCount, setOpenExceptionsCount] = useState<number>(0);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -41,17 +41,8 @@ export default function DashboardRoutePage() {
   }
 
   return (
-    <AppShell activeTab="dashboard" openExceptionsCount={openExceptionsCount}>
-      <RecoveryDetailDrawer
-        workflowId={selectedWorkflowId}
-        onClose={() => setSelectedWorkflowId(null)}
-        onViewOrder={(orderId) => router.push(`/orders/${orderId}`)}
-      />
-      <DashboardView
-        userName={user.name}
-        onInspectException={(id) => router.push(`/exceptions/${id}`)}
-        onInspectWorkflow={(wfId) => router.push(`/recoveries/${wfId}`)}
-      />
+    <AppShell activeTab="recoveries" openExceptionsCount={openExceptionsCount}>
+      <RecoveryDetailView id={id} />
     </AppShell>
   );
 }

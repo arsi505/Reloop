@@ -80,9 +80,9 @@ export function AppShell({
       badge: openExceptionsCount > 0 ? openExceptionsCount : undefined,
     },
     { id: 'orders', label: 'Orders', href: '/orders', icon: OrdersIcon },
-    { id: 'recoveries', label: 'Recoveries', href: '/dashboard', icon: RecoveriesIcon },
-    { id: 'integrations', label: 'Integrations', href: '/dashboard', icon: IntegrationsIcon },
-    { id: 'health', label: 'System Health', href: '/dashboard', icon: HealthIcon },
+    { id: 'recoveries', label: 'Recoveries', href: '/recoveries', icon: RecoveriesIcon },
+    { id: 'integrations', label: 'Integrations', href: '/integrations', icon: IntegrationsIcon },
+    { id: 'health', label: 'System Health', href: '/health', icon: HealthIcon },
   ];
 
   const secondaryNavItems: {

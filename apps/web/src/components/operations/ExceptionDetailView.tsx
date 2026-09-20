@@ -15,6 +15,7 @@ import {
   ArrowRightIcon,
   ChevronDownIcon,
 } from '../icons/Icons';
+import { ApprovalPanel } from './ApprovalPanel';
 
 interface ExceptionDetailViewProps {
   exceptionId: string;
@@ -258,42 +259,12 @@ export function ExceptionDetailView({
         </div>
       </div>
 
-      {/* Approval Preview (if present) */}
+      {/* Operator Approval Section (reusable ApprovalPanel) */}
       {detail.approval && (
-        <div className="p-5 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#71717a]">
-              Operator Approval Request
-            </h3>
-            <StatusBadge status={detail.approval.status} size="sm" />
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="p-3 bg-[#fffbeb] border border-[#fde68a] rounded-lg text-[#b45309]">
-              <p className="font-semibold text-xs">Approval Required by Policy</p>
-              <p className="text-[11px] mt-0.5">
-                {detail.approval.reason || 'Manual human operator gate before executing state change.'}
-              </p>
-              <div className="mt-2 text-[10px] text-[#92400e]">
-                Requested: {new Date(detail.approval.requestedAt).toLocaleString()}
-                {detail.approval.expiresAt && (
-                  <span> | Expires: {new Date(detail.approval.expiresAt).toLocaleString()}</span>
-                )}
-              </div>
-            </div>
-
-            {detail.approval.previewSnapshot && (
-              <div className="space-y-1 pt-1">
-                <span className="text-[11px] font-semibold text-[#71717a]">
-                  Proposed Mutation Preview Snapshot:
-                </span>
-                <pre className="p-3 rounded-lg bg-[#fbfbfa] border border-[#ececeb] font-mono text-[11px] text-[#52525b] overflow-x-auto">
-                  {JSON.stringify(detail.approval.previewSnapshot, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
-        </div>
+        <ApprovalPanel
+          approval={detail.approval}
+          onDecisionCompleted={fetchDetail}
+        />
       )}
 
       {/* Workflow & Recovery Execution Steps */}
