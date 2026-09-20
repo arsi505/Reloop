@@ -23,6 +23,7 @@
     "@reloop/integration-sdk": "*",
     "@reloop/connector-simulator": "*",
     "@reloop/connector-shopify": "*",
+    "@reloop/connector-shipstation": "*",
     "@reloop/reconciliation-core": "*",
     "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",

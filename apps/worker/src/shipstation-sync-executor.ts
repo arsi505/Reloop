@@ -1,0 +1,490 @@
+import { PrismaClient, JobErrorCategory } from '@prisma/client';
+import {
+  ShipStationClient,
+  normalizeShipStationShipment,
+  normalizeShipStationLabel,
+  NormalizedShipStationLabel,
+  decryptCredentials,
+  ShipStationRateLimitError,
+  ShipStationServerError,
+  ShipStationUnauthorizedError,
+  ShipStationNotFoundError,
+  ShipStationError,
+} from '@reloop/connector-shipstation';
+import { EncryptedCredentialEnvelope, StoredShipStationCredential } from '@reloop/integration-sdk';
+import { JobContext } from './executor';
+import { JobExecutionError } from './errors';
+
+export interface ShipStationSyncExecutorOptions {
+  encryptionKey?: string;
+  defaultMaxShipments?: number;
+  fetchFn?: typeof fetch;
+}
+
+export interface ShipStationSyncJobResult {
+  integrationId: string;
+  totalShipmentsSynced: number;
+  pagesProcessed: number;
+  complete: boolean;
+  watermarkAdvancedTo?: string;
+}
+
+export class ShipStationSyncJobExecutor {
+  private prisma: PrismaClient;
+  private encryptionKey: string;
+  private defaultMaxShipments: number;
+  private fetchFn?: typeof fetch;
+
+  constructor(prisma: PrismaClient, options: ShipStationSyncExecutorOptions = {}) {
+    this.prisma = prisma;
+    this.encryptionKey = options.encryptionKey || process.env.INTEGRATION_ENCRYPTION_KEY || '';
+    this.defaultMaxShipments = options.defaultMaxShipments || 250;
+    this.fetchFn = options.fetchFn;
+  }
+
+  async execute(context: JobContext): Promise<ShipStationSyncJobResult> {
+    const payload = (context.payload as Record<string, any>) || {};
+    const integrationId = payload.integrationId as string;
+
+    if (!integrationId) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'MISSING_INTEGRATION_ID',
+        message: `Job ${context.jobId} missing required integrationId in payload`,
+        retryable: false,
+      });
+    }
+
+    // 1. Load Integration from PostgreSQL
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+    });
+
+    if (!integration) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'INTEGRATION_NOT_FOUND',
+        message: `Integration ${integrationId} not found in database`,
+        retryable: false,
+      });
+    }
+
+    // 2. Authoritative verification of organization ownership
+    if (integration.organizationId !== context.organizationId) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'ORGANIZATION_MISMATCH',
+        message: `Integration ${integrationId} organization ${integration.organizationId} does not match job organization ${context.organizationId}`,
+        retryable: false,
+      });
+    }
+
+    // 3. Verify provider
+    if (integration.provider !== 'SHIPSTATION') {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'PROVIDER_MISMATCH',
+        message: `Integration ${integrationId} provider is ${integration.provider}, expected SHIPSTATION`,
+        retryable: false,
+      });
+    }
+
+    // 4. Verify integration status
+    if (integration.status === 'DISCONNECTED') {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'INTEGRATION_DISCONNECTED',
+        message: `Integration ${integrationId} is DISCONNECTED; sync cancelled`,
+        retryable: false,
+      });
+    }
+
+    // 5. Decrypt credentials inside execution boundary
+    if (!integration.encryptedCredentials) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'MISSING_CREDENTIALS',
+        message: `Integration ${integrationId} has no stored encrypted credentials`,
+        retryable: false,
+      });
+    }
+
+    let creds: StoredShipStationCredential;
+    try {
+      creds = decryptCredentials<StoredShipStationCredential>(
+        integration.encryptedCredentials as unknown as EncryptedCredentialEnvelope,
+        this.encryptionKey,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'CREDENTIAL_DECRYPTION_FAILED',
+        message: `Failed to decrypt credentials for integration ${integrationId}: ${msg}`,
+        retryable: false,
+      });
+    }
+
+    if (!creds || !creds.apiKey) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'INVALID_CREDENTIAL_PAYLOAD',
+        message: `Integration ${integrationId} decrypted credentials missing apiKey`,
+        retryable: false,
+      });
+    }
+
+    // 6. Initialize read-only ShipStation client
+    const client = new ShipStationClient({
+      apiKey: creds.apiKey,
+      fetchFn: this.fetchFn,
+    });
+
+    const maxShipments = payload.maxShipments || this.defaultMaxShipments;
+    let totalSynced = 0;
+    let pagesProcessed = 0;
+    let currentPage = 1;
+
+    // Incremental sync windowing with 5-minute safety overlap
+    const currentConfig = (integration.configuration as Record<string, any>) || {};
+    const lastWatermark = currentConfig.lastSuccessfulSyncWatermark as string | undefined;
+    const OVERLAP_MS = 5 * 60 * 1000; // 5 minutes
+
+    let modifiedAtStart = payload.modifiedAtStart as string | undefined;
+    if (!modifiedAtStart && lastWatermark) {
+      const wmDate = new Date(lastWatermark);
+      if (!isNaN(wmDate.getTime())) {
+        modifiedAtStart = new Date(Math.max(0, wmDate.getTime() - OVERLAP_MS)).toISOString();
+      }
+    }
+    const modifiedAtEnd = (payload.modifiedAtEnd as string | undefined) || new Date().toISOString();
+
+    let latestModifiedAtObserved: Date | undefined = lastWatermark ? new Date(lastWatermark) : undefined;
+
+    try {
+      // Preferred Label Fetch Architecture:
+      // Query labels in paginated batches for the bounded sync window rather than N+1 per-shipment calls.
+      const bulkLabelsByShipmentId = new Map<string, NormalizedShipStationLabel[]>();
+      let labelPage = 1;
+      const maxLabelPages = Math.max(1, Math.ceil(maxShipments / 25)); // bounded label pagination ceiling
+      try {
+        while (labelPage <= maxLabelPages) {
+          const labelPageRes = await client.listLabels({
+            page: labelPage,
+            pageSize: 50,
+            createdAtStart: modifiedAtStart,
+            createdAtEnd: modifiedAtEnd,
+            sortBy: 'created_at',
+            sortDir: 'asc',
+          });
+
+          if (!labelPageRes.labels || labelPageRes.labels.length === 0) {
+            break;
+          }
+
+          for (const rawLabel of labelPageRes.labels) {
+            const normalizedLabel = normalizeShipStationLabel(rawLabel);
+            if (normalizedLabel.shipmentId) {
+              const sid = String(normalizedLabel.shipmentId);
+              const list = bulkLabelsByShipmentId.get(sid) || [];
+              list.push(normalizedLabel);
+              bulkLabelsByShipmentId.set(sid, list);
+            }
+          }
+
+          if (labelPage >= (labelPageRes.pages || 1)) {
+            break;
+          }
+          labelPage++;
+        }
+      } catch (err: unknown) {
+        if (!(err instanceof ShipStationNotFoundError)) {
+          throw err;
+        }
+      }
+
+      while (totalSynced < maxShipments) {
+        pagesProcessed++;
+        const pageSize = Math.min(50, maxShipments - totalSynced);
+
+        const pageRes = await client.listShipments({
+          page: currentPage,
+          pageSize,
+          modifiedAtStart,
+          modifiedAtEnd,
+          sortBy: 'modified_at',
+          sortDir: 'asc',
+        });
+
+        if (!pageRes.shipments || pageRes.shipments.length === 0) {
+          break;
+        }
+
+        // Idempotently project shipments, labels, and tracking references
+        for (const rawShipment of pageRes.shipments) {
+          const normalized = normalizeShipStationShipment(rawShipment);
+
+          // Track newest modified timestamp for checkpointing
+          if (normalized.updatedAt) {
+            if (!latestModifiedAtObserved || normalized.updatedAt > latestModifiedAtObserved) {
+              latestModifiedAtObserved = normalized.updatedAt;
+            }
+          }
+
+          // Find or create ExternalOrder representation
+          let externalOrder = await this.prisma.externalOrder.findUnique({
+            where: {
+              organizationId_externalOrderNumber: {
+                organizationId: integration.organizationId,
+                externalOrderNumber: normalized.orderNumber,
+              },
+            },
+          });
+
+          // CRITICAL SEMANTIC INVARIANT:
+          // 'label_purchased' is mapped to 'LABEL_CREATED', NOT 'SHIPPED'.
+          // ExternalOrder status is set to 'FULFILLING', never prematurely 'SHIPPED'.
+          const targetOrderStatus =
+            normalized.status === 'CANCELLED'
+              ? 'CANCELLED'
+              : normalized.status === 'LABEL_CREATED'
+                ? 'FULFILLING'
+                : 'READY_FOR_FULFILLMENT';
+
+          if (!externalOrder) {
+            externalOrder = await this.prisma.externalOrder.create({
+              data: {
+                organizationId: integration.organizationId,
+                primaryIntegrationId: integration.id,
+                externalOrderNumber: normalized.orderNumber,
+                status: targetOrderStatus,
+                sourceCreatedAt: normalized.createdAt,
+                lastObservedAt: normalized.updatedAt || new Date(),
+              },
+            });
+          } else {
+            // Out-of-order fence: only update order status if incoming modified_at is >= existing lastObservedAt
+            const isNewer =
+              !externalOrder.lastObservedAt || normalized.updatedAt >= externalOrder.lastObservedAt;
+
+            await this.prisma.externalOrder.update({
+              where: { id: externalOrder.id },
+              data: {
+                ...(isNewer ? { status: targetOrderStatus } : {}),
+                lastObservedAt: isNewer ? normalized.updatedAt : externalOrder.lastObservedAt,
+              },
+            });
+          }
+
+          // Project Shipment ExternalReference
+          await this.prisma.externalReference.upsert({
+            where: {
+              organizationId_integrationId_resourceType_externalId: {
+                organizationId: integration.organizationId,
+                integrationId: integration.id,
+                resourceType: 'SHIPMENT',
+                externalId: normalized.shipmentId,
+              },
+            },
+            update: {
+              externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
+              updatedAt: new Date(),
+            },
+            create: {
+              organizationId: integration.organizationId,
+              integrationId: integration.id,
+              externalOrderId: externalOrder.id,
+              resourceType: 'SHIPMENT',
+              externalId: normalized.shipmentId,
+              externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
+            },
+          });
+
+          // CRITICAL V2 SEMANTICS:
+          // Tracking truth originates on Label resources, not inferred from shipment.
+          // Authoritative join: label.shipment_id === shipment.shipment_id
+          const sid = String(normalized.shipmentId);
+          let labelsList: NormalizedShipStationLabel[] = [];
+
+          if (bulkLabelsByShipmentId.has(sid)) {
+            labelsList = bulkLabelsByShipmentId.get(sid)!;
+          } else if (normalized.status === 'LABEL_CREATED') {
+            // Targeted fallback lookup:
+            // Only used when a shipment indicates label_purchased intent but
+            // its label was not established during bulk window pagination.
+            try {
+              const fallbackRes = await client.listLabels({ shipmentId: normalized.shipmentId });
+              if (fallbackRes.labels && fallbackRes.labels.length > 0) {
+                labelsList = fallbackRes.labels
+                  .filter((l) => String(l.shipment_id) === sid)
+                  .map((l) => normalizeShipStationLabel(l));
+              }
+            } catch (err: unknown) {
+              if (!(err instanceof ShipStationNotFoundError)) {
+                throw err;
+              }
+            }
+          }
+
+          // Project LABEL ExternalReferences
+          for (const label of labelsList) {
+            const labelPayload = JSON.stringify({
+              trackingNumber: label.trackingNumber,
+              voided: label.voided,
+              carrierCode: label.carrierCode,
+              serviceCode: label.serviceCode,
+              status: label.status,
+              trackingStatus: label.trackingStatus,
+            });
+
+            await this.prisma.externalReference.upsert({
+              where: {
+                organizationId_integrationId_resourceType_externalId: {
+                  organizationId: integration.organizationId,
+                  integrationId: integration.id,
+                  resourceType: 'LABEL',
+                  externalId: label.labelId,
+                },
+              },
+              update: {
+                externalReference: labelPayload,
+                updatedAt: new Date(),
+              },
+              create: {
+                organizationId: integration.organizationId,
+                integrationId: integration.id,
+                externalOrderId: externalOrder.id,
+                resourceType: 'LABEL',
+                externalId: label.labelId,
+                externalReference: labelPayload,
+              },
+            });
+          }
+
+          // Authoritative Tracking ExternalReference projection:
+          // ONLY active, non-voided labels with valid tracking numbers provide tracking truth!
+          const activeLabels = labelsList.filter(
+            (l) => !l.voided && Boolean(l.trackingNumber && l.trackingNumber.trim()),
+          );
+
+          for (const activeLabel of activeLabels) {
+            await this.prisma.externalReference.upsert({
+              where: {
+                organizationId_integrationId_resourceType_externalId: {
+                  organizationId: integration.organizationId,
+                  integrationId: integration.id,
+                  resourceType: 'TRACKING',
+                  externalId: activeLabel.trackingNumber,
+                },
+              },
+              update: {
+                externalReference: activeLabel.carrierCode || null,
+                updatedAt: new Date(),
+              },
+              create: {
+                organizationId: integration.organizationId,
+                integrationId: integration.id,
+                externalOrderId: externalOrder.id,
+                resourceType: 'TRACKING',
+                externalId: activeLabel.trackingNumber,
+                externalReference: activeLabel.carrierCode || null,
+              },
+            });
+          }
+
+          totalSynced++;
+        }
+
+        if (currentPage >= pageRes.pages) {
+          break;
+        }
+
+        currentPage++;
+      }
+    } catch (err: unknown) {
+      if (err instanceof ShipStationRateLimitError) {
+        throw new JobExecutionError({
+          category: JobErrorCategory.RATE_LIMITED,
+          code: 'SHIPSTATION_RATE_LIMIT',
+          message: err.message,
+          retryable: true,
+          retryAfterMs: (err.retryAfterSeconds || 5) * 1000,
+        });
+      }
+
+      if (err instanceof ShipStationUnauthorizedError) {
+        // Mark integration DEGRADED
+        await this.prisma.integration.update({
+          where: { id: integrationId },
+          data: { status: 'DEGRADED' },
+        });
+
+        await this.prisma.auditLog.create({
+          data: {
+            organizationId: integration.organizationId,
+            entityType: 'INTEGRATION',
+            entityId: integrationId,
+            action: 'SHIPSTATION_INTEGRATION_REAUTH_REQUIRED',
+            metadata: {
+              reason: 'HTTP 401 Unauthorized during sync',
+            },
+          },
+        });
+
+        throw new JobExecutionError({
+          category: JobErrorCategory.BUSINESS_ERROR,
+          code: 'SHIPSTATION_AUTH_FAILED',
+          message: err.message,
+          retryable: false,
+        });
+      }
+
+      if (err instanceof ShipStationServerError) {
+        throw new JobExecutionError({
+          category: JobErrorCategory.TRANSIENT,
+          code: 'SHIPSTATION_SERVER_TRANSIENT',
+          message: err.message,
+          retryable: true,
+        });
+      }
+
+      if (err instanceof ShipStationError) {
+        throw new JobExecutionError({
+          category: err.isTransient ? JobErrorCategory.TRANSIENT : JobErrorCategory.BUSINESS_ERROR,
+          code: 'SHIPSTATION_API_ERROR',
+          message: err.message,
+          retryable: err.isTransient,
+        });
+      }
+
+      throw err;
+    }
+
+    // 7. Update Integration configuration with completed sync & advance watermark ONLY ON SUCCESS
+    const newWatermark = latestModifiedAtObserved
+      ? latestModifiedAtObserved.toISOString()
+      : modifiedAtEnd;
+
+    await this.prisma.integration.update({
+      where: { id: integrationId },
+      data: {
+        configuration: {
+          ...currentConfig,
+          initialSyncStatus: 'COMPLETED',
+          lastSyncAt: new Date().toISOString(),
+          lastSyncShipmentsCount: totalSynced,
+          lastSuccessfulSyncWatermark: newWatermark,
+        },
+      },
+    });
+
+    // 8. Return safe result metadata (ZERO secrets)
+    return {
+      integrationId: integration.id,
+      totalShipmentsSynced: totalSynced,
+      pagesProcessed,
+      complete: totalSynced >= maxShipments || true,
+      watermarkAdvancedTo: newWatermark,
+    };
+  }
+}

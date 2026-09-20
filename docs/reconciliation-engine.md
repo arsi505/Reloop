@@ -107,3 +107,15 @@ While the periodic reconciliation scanner continuously sweeps all organizations,
 - **Read-Only External Provider**: Orders and fulfillments from connected real Shopify merchant stores are ingested into `ExternalOrder` and `ExternalReference` projections via GraphQL Admin API (`2026-07`) cursor queries and authenticated webhooks.
 - **Multi-Fulfillment Consolidation**: Shopify multi-fulfillment tracking numbers and carrier metadata are consolidated deterministically into the normalized order snapshot.
 - **Safety Invariant**: Reconciler evaluates real Shopify mirrored orders against warehouse and 3PL representations without executing any Shopify mutations. See [shopify-integration.md](./shopify-integration.md).
+
+---
+
+## 10. Real ShipStation V2 Shipment Synchronization & Cross-System Matching (Day 16)
+
+- **Two Real External Providers**: Reconciles mirrored state between real Shopify merchant orders and real ShipStation shipments (`@reloop/connector-shipstation`).
+- **Semantic Guards & Invariants**:
+  - `label_purchased` is mapped to `LABEL_CREATED`, strictly avoiding `SHIPPED`.
+  - ShipStation is shipping label software, NOT a 3PL warehouse. `ORDER_MISSING_AT_3PL` never triggers for ShipStation.
+  - `SHIPPED_AT_3PL_UNFULFILLED_AT_SHOPIFY` requires authoritative `SHIPPED` status and does not trigger on `LABEL_CREATED`.
+- **Authoritative Missing Tracking**: When ShipStation has authoritative tracking and Shopify is `UNFULFILLED`, emits `TRACKING_MISSING_IN_SHOPIFY` (`AUTO_RECOVER` if match has zero conflicts and 1 candidate; `REQUIRE_APPROVAL` if ambiguous).
+- **Simulator Action Safety Fence**: Simulator recovery action execution is strictly forbidden against real ShipStation or Shopify integrations. See [shipstation-integration.md](./shipstation-integration.md).

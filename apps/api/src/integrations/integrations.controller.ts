@@ -21,8 +21,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifySyncService } from './shopify-sync.service';
 import { ConnectShopifyDto } from './dto/connect-shopify.dto';
+import { ConnectShipStationDto } from './dto/connect-shipstation.dto';
 import { ShopifyCallbackQueryDto } from './dto/shopify-callback-query.dto';
 import { IntegrationStatusResponseDto } from './dto/integration-status-response.dto';
+import { ShipStationConnectionService } from './shipstation-connection.service';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -32,6 +34,7 @@ export class IntegrationsController {
     private readonly prisma: PrismaService,
     private readonly shopifyOAuth: ShopifyOAuthService,
     private readonly shopifySync: ShopifySyncService,
+    private readonly shipstationConnection: ShipStationConnectionService,
   ) {}
 
   /**
@@ -46,6 +49,40 @@ export class IntegrationsController {
     @Body() body: ConnectShopifyDto,
   ) {
     return this.shopifyOAuth.initiateConnect(user.organizationId, user.userId, body.shop);
+  }
+
+  /**
+   * Connects ShipStation integration with API Key.
+   * Restricted to OWNER and ADMIN roles.
+   */
+  @Post('shipstation/connect')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.OWNER, Role.ADMIN)
+  async connectShipStation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: ConnectShipStationDto,
+  ) {
+    return this.shipstationConnection.connect(user.organizationId, user.userId, body.apiKey);
+  }
+
+  /**
+   * Replaces credentials for an existing ShipStation integration.
+   * Restricted to OWNER and ADMIN roles.
+   */
+  @Post('shipstation/:id/credentials/replace')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.OWNER, Role.ADMIN)
+  async replaceShipStationCredentials(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: ConnectShipStationDto,
+  ) {
+    return this.shipstationConnection.replaceCredentials(
+      user.organizationId,
+      user.userId,
+      id,
+      body.apiKey,
+    );
   }
 
   /**
@@ -142,8 +179,9 @@ export class IntegrationsController {
         actorUserId: user.userId,
         entityType: 'INTEGRATION',
         entityId: id,
-        action: 'SHOPIFY_INTEGRATION_DISCONNECTED',
+        action: `${integration.provider}_INTEGRATION_DISCONNECTED`,
         metadata: {
+          provider: integration.provider,
           shopDomain: integration.shopDomain,
         },
       },

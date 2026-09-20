@@ -12,6 +12,7 @@ import { StaleMessageRecoveryService } from './stale-message-recovery';
 import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
 import { WorkflowStepExecutor } from './workflow-step-executor';
 import { ShopifySyncJobExecutor } from './shopify-sync-executor';
+import { ShipStationSyncJobExecutor } from './shipstation-sync-executor';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -47,6 +48,7 @@ export class WorkerService {
       stepHandlerRegistry?: WorkflowStepHandlerRegistry;
       retryPolicy?: RetryPolicy;
       shopifySyncExecutor?: ShopifySyncJobExecutor;
+      shipstationSyncExecutor?: ShipStationSyncJobExecutor;
       fetchFn?: typeof fetch;
     } = {},
   ) {
@@ -70,6 +72,17 @@ export class WorkerService {
         });
       this.executorRegistry.register('SHOPIFY_SYNC_ORDERS', async (ctx) => {
         return await shopifySync.execute(ctx);
+      });
+    }
+
+    if (!this.executorRegistry.has('SHIPSTATION_SYNC_SHIPMENTS')) {
+      const shipstationSync =
+        options.shipstationSyncExecutor ??
+        new ShipStationSyncJobExecutor(this.prisma, {
+          fetchFn: options.fetchFn,
+        });
+      this.executorRegistry.register('SHIPSTATION_SYNC_SHIPMENTS', async (ctx) => {
+        return await shipstationSync.execute(ctx);
       });
     }
 

@@ -29,12 +29,19 @@ export class ReconciliationRules {
     const hasConflictingOrder =
       warehouseMatch.status === 'CONFLICT' &&
       warehouseMatch.conflictingIdentifiers.some((c) => c.startsWith('externalReference') || c.startsWith('orderNumber'));
+    const hasConflictingShipping =
+      shippingMatch.status === 'CONFLICT' &&
+      shippingMatch.conflictingIdentifiers.some((c) =>
+        c.startsWith('trackingConflict') ||
+        c.startsWith('splitShipmentTrackingConflict') ||
+        c.startsWith('orderNumber'),
+      );
 
     const isDuplicateSimulatorError =
       shopify?.error?.errorCode === 'DUPLICATE_ORDER' ||
       warehouse?.error?.errorCode === 'DUPLICATE_ORDER';
 
-    if (hasMultipleCandidates || isAmbiguous || hasConflictingOrder || isDuplicateSimulatorError) {
+    if (hasMultipleCandidates || isAmbiguous || hasConflictingOrder || hasConflictingShipping || isDuplicateSimulatorError) {
       const conflictingIds = [
         ...warehouseMatch.conflictingIdentifiers,
         ...shippingMatch.conflictingIdentifiers,
@@ -324,14 +331,60 @@ export class ReconciliationRules {
       return null;
     }
 
-    // Does external tracking exist?
-    const externalTracking = warehouse?.trackingNumber || shipstation?.trackingNumber;
+    // Does authoritative external tracking exist?
+    // CRITICAL SEMANTIC INVARIANT:
+    // ShipStation tracking MUST come from an authoritative Label resource, never inferred merely from shipment_status.
+    // Voided labels must NOT supply active tracking evidence.
+    let shipstationTracking: string | undefined;
+    let isSplitShipment = false;
+    let hasVoidedLabels = false;
+    let shipstationActiveLabelCount = 0;
+    let shipstationTotalLabelCount = 0;
+    let uniqueTrackingCount = 0;
+
+    if (shipstation) {
+      if (shipstation.labels && shipstation.labels.length > 0) {
+        shipstationTotalLabelCount = shipstation.labels.length;
+        const activeLabels = shipstation.labels.filter(
+          (l) => !l.voided && Boolean(l.trackingNumber && l.trackingNumber.trim()),
+        );
+        shipstationActiveLabelCount = activeLabels.length;
+        hasVoidedLabels = shipstation.labels.some((l) => l.voided);
+
+        const uniqueTrackings = Array.from(new Set(activeLabels.map((l) => l.trackingNumber.trim())));
+        uniqueTrackingCount = uniqueTrackings.length;
+
+        if (uniqueTrackings.length === 1) {
+          shipstationTracking = uniqueTrackings[0];
+        } else if (uniqueTrackings.length > 1) {
+          // Split shipment with multiple tracking numbers
+          isSplitShipment = true;
+          shipstationTracking = uniqueTrackings[0];
+        } else {
+          // All labels voided or missing tracking number
+          shipstationTracking = undefined;
+        }
+      } else if (shipstation.trackingNumber && shipstation.trackingNumber.trim()) {
+        // Direct tracking snapshot (without explicit labels array)
+        shipstationTracking = shipstation.trackingNumber.trim();
+        uniqueTrackingCount = 1;
+      }
+    }
+
+    const externalTracking = warehouse?.trackingNumber || shipstationTracking;
     if (!externalTracking) {
       return null;
     }
 
-    // Safety rule for AUTO_RECOVER eligibility:
-    // Requires exact deterministic matching, 1 candidate, and zero conflicts
+    // Safety rules for AUTO_RECOVER eligibility:
+    // ALL of the following must hold for AUTO_RECOVER:
+    // 1. Exact deterministic matching passed
+    // 2. Exactly one candidate under configured policy
+    // 3. Exactly one applicable non-voided tracking-bearing label
+    // 4. Zero conflicts
+    // 5. Zero ambiguity
+    // 6. Not a split shipment
+    // 7. No voided label ambiguity
     const warehouseMatch = DeterministicMatcher.matchShopifyToWarehouse(snapshot);
     const shippingMatch = DeterministicMatcher.matchShopifyToShipping(snapshot);
 
@@ -345,11 +398,28 @@ export class ReconciliationRules {
       warehouseMatch.conflictingIdentifiers.length > 0 ||
       shippingMatch.conflictingIdentifiers.length > 0;
 
-    const singleCandidate =
-      warehouseMatch.candidateCount <= 1 && shippingMatch.candidateCount <= 1;
+    const candidateShipmentCount =
+      shipstation?.candidateShipments && shipstation.candidateShipments.length > 0
+        ? shipstation.candidateShipments.length
+        : (shipstation ? 1 : 0);
 
-    // AUTO_RECOVER only when all required criteria strictly pass
-    const isAutoRecoverEligible = matchPassed && !hasConflict && singleCandidate;
+    const singleCandidate =
+      warehouseMatch.candidateCount <= 1 &&
+      shippingMatch.candidateCount <= 1 &&
+      candidateShipmentCount <= 1;
+
+    // Must have exactly 1 active non-voided tracking identity
+    const singleVerifiedTrackingIdentity =
+      !isSplitShipment &&
+      !hasVoidedLabels &&
+      (shipstation ? shipstationActiveLabelCount <= 1 : true);
+
+    const isAutoRecoverEligible =
+      matchPassed &&
+      !hasConflict &&
+      singleCandidate &&
+      singleVerifiedTrackingIdentity;
+
     const recoveryLevel = isAutoRecoverEligible ? 'AUTO_RECOVER' : 'REQUIRE_APPROVAL';
 
     return {
@@ -370,13 +440,18 @@ export class ReconciliationRules {
         },
         matchedIdentifiers: [...warehouseMatch.matchedIdentifiers, ...shippingMatch.matchedIdentifiers],
         conflictingIdentifiers: [...warehouseMatch.conflictingIdentifiers, ...shippingMatch.conflictingIdentifiers],
-        candidateCount: Math.max(warehouseMatch.candidateCount, shippingMatch.candidateCount, 1),
+        candidateCount: Math.max(warehouseMatch.candidateCount, shippingMatch.candidateCount, candidateShipmentCount, 1),
         details: {
           externalTracking,
           isAutoRecoverEligible,
+          shipmentCandidateCount: candidateShipmentCount,
+          labelCandidateCount: shipstationTotalLabelCount,
+          trackingIdentityCount: uniqueTrackingCount || (externalTracking ? 1 : 0),
+          isSplitShipment,
+          hasVoidedLabels,
           policyExplanation: isAutoRecoverEligible
-            ? 'Deterministic matching passed with no conflicts and exactly one candidate.'
-            : 'Match was ambiguous or contained conflicting identifiers; human approval required.',
+            ? 'Deterministic matching passed with no conflicts, exactly one candidate, and exactly one verified active label.'
+            : 'Match was ambiguous, split-shipment, voided, or contained conflicting identifiers; human approval required.',
         },
       },
     };
@@ -391,10 +466,17 @@ export class ReconciliationRules {
     nowIso: string,
     options?: ReconcileOptions,
   ): ReconciliationFinding | null {
-    const { shopify, warehouse } = snapshot;
+    const { shopify, warehouse, shipstation } = snapshot;
 
     // Only triggers if Shopify order exists, 3PL is healthy, but warehouse order is missing
     if (!shopify) {
+      return null;
+    }
+
+    // ShipStation is a shipping provider, NOT a generic 3PL warehouse.
+    // If the order is fulfilled via ShipStation and there is no 3PL warehouse inventory tracking,
+    // do not trigger ORDER_MISSING_AT_3PL.
+    if (shipstation && !snapshot.inventory?.some((i) => i.warehouseQuantity !== undefined)) {
       return null;
     }
 

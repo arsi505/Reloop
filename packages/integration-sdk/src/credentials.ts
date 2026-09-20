@@ -17,3 +17,9 @@ export interface StoredShopifyCredential {
   tokenType?: string;
   associatedUser?: Record<string, unknown>;
 }
+
+export interface StoredShipStationCredential {
+  apiKey: string;
+  keyId?: string;
+  validatedAt?: string;
+}

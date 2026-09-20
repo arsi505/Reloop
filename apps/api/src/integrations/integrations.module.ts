@@ -5,6 +5,7 @@ import { IntegrationsController } from './integrations.controller';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { ShopifyTokenRefreshService } from './shopify-token-refresh.service';
 import { ShopifySyncService } from './shopify-sync.service';
+import { ShipStationConnectionService } from './shipstation-connection.service';
 
 @Module({
   imports: [PrismaModule, AuthModule],
@@ -13,11 +14,13 @@ import { ShopifySyncService } from './shopify-sync.service';
     ShopifyOAuthService,
     ShopifyTokenRefreshService,
     ShopifySyncService,
+    ShipStationConnectionService,
   ],
   exports: [
     ShopifyOAuthService,
     ShopifyTokenRefreshService,
     ShopifySyncService,
+    ShipStationConnectionService,
   ],
 })
 export class IntegrationsModule {}

@@ -16,6 +16,7 @@
     "@reloop/workflow-core": "*",
     "@reloop/connector-simulator": "*",
     "@reloop/connector-shopify": "*",
+    "@reloop/connector-shipstation": "*",
     "@reloop/integration-sdk": "*",
     "dotenv": "^16.4.7",
     "ioredis": "^5.5.0"

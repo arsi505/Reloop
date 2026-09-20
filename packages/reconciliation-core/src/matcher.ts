@@ -127,23 +127,54 @@ export class DeterministicMatcher {
       };
     }
 
-    // Multiple candidates
+    // 1. Check for multiple candidate shipment representations (Ambiguity / Duplicate Risk)
     const candidateShipments = shipstation.candidateShipments || [];
     if (candidateShipments.length > 1) {
+      const candidateTrackings = candidateShipments
+        .map((s) => s.trackingNumber)
+        .filter(Boolean) as string[];
+      const uniqueCandidateTrackings = Array.from(new Set(candidateTrackings));
+
+      // If candidates have conflicting tracking numbers under the same order/externalShipmentId:
+      if (uniqueCandidateTrackings.length > 1) {
+        return {
+          status: 'CONFLICT',
+          matchedIdentifiers: [],
+          conflictingIdentifiers: uniqueCandidateTrackings.map((t) => `trackingConflict:${t}`),
+          candidateCount: candidateShipments.length,
+          candidateIds: candidateShipments.map((s) => s.id),
+          details: `Conflicting tracking numbers (${uniqueCandidateTrackings.join(', ')}) across ${candidateShipments.length} candidate shipments for order ${shopify.orderNumber}`,
+        };
+      }
+
       return {
         status: 'AMBIGUOUS',
         matchedIdentifiers: [],
-        conflictingIdentifiers: candidateShipments.map((s) => s.trackingNumber),
+        conflictingIdentifiers: candidateShipments.map((s) => s.trackingNumber || s.id),
         candidateCount: candidateShipments.length,
         candidateIds: candidateShipments.map((s) => s.id),
         details: `Multiple candidate shipments (${candidateShipments.length}) found in shipping system for order ${shopify.orderNumber}`,
       };
     }
 
+    // 2. Check for conflicting active labels on the single shipment (Split shipment / conflicting tracking)
+    const activeLabels = (shipstation.labels || []).filter((l) => !l.voided && Boolean(l.trackingNumber));
+    const uniqueTrackingNumbers = Array.from(new Set(activeLabels.map((l) => l.trackingNumber)));
+    if (uniqueTrackingNumbers.length > 1) {
+      return {
+        status: 'CONFLICT',
+        matchedIdentifiers: [],
+        conflictingIdentifiers: uniqueTrackingNumbers.map((t) => `splitShipmentTrackingConflict:${t}`),
+        candidateCount: 1,
+        candidateIds: [shipstation.id],
+        details: `Conflicting active tracking labels (${uniqueTrackingNumbers.join(', ')}) found for shipment ${shipstation.id}`,
+      };
+    }
+
     const matched: string[] = [];
     const conflicting: string[] = [];
 
-    // Order number
+    // 3. Order Number Agreement
     if (shipstation.orderNumber) {
       if (shipstation.orderNumber === shopify.orderNumber) {
         matched.push(`orderNumber:${shopify.orderNumber}`);
@@ -152,12 +183,22 @@ export class DeterministicMatcher {
       }
     }
 
-    // Cross-system tracking consistency with 3PL
-    if (warehouse?.trackingNumber && shipstation.trackingNumber) {
-      if (warehouse.trackingNumber === shipstation.trackingNumber) {
-        matched.push(`trackingNumber:${shipstation.trackingNumber}`);
+    // 4. External Shipment ID Agreement (when present)
+    if (shipstation.externalShipmentId) {
+      if (shipstation.externalShipmentId === shopify.id || shipstation.externalShipmentId === shopify.orderNumber) {
+        matched.push(`externalShipmentId:${shipstation.externalShipmentId}`);
+      }
+    }
+
+    // 5. Cross-system tracking consistency with 3PL
+    const shippingTracking =
+      shipstation.trackingNumber || (activeLabels.length === 1 ? activeLabels[0].trackingNumber : undefined);
+
+    if (warehouse?.trackingNumber && shippingTracking) {
+      if (warehouse.trackingNumber === shippingTracking) {
+        matched.push(`trackingNumber:${shippingTracking}`);
       } else {
-        conflicting.push(`trackingNumberConflict: warehouse=${warehouse.trackingNumber} vs shipping=${shipstation.trackingNumber}`);
+        conflicting.push(`trackingNumberConflict: warehouse=${warehouse.trackingNumber} vs shipping=${shippingTracking}`);
       }
     }
 

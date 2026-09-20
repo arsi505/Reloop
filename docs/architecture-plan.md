@@ -187,3 +187,17 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Advisory-Locked Token Refresh**: Automated token refresh uses PostgreSQL transactional advisory locks (`pg_advisory_xact_lock`) to serialize concurrent refresh attempts across worker and API replicas, with a double-check pattern and distinction between transient network errors (safe for retry with existing refresh token) and permanent revocations (degrades integration).
 - **Durable Sync Handoff & Crash-Recovery**: OAuth callback enqueues a durable `Job` (`SHOPIFY_SYNC_ORDERS`, `status: QUEUED`) and returns immediately without in-memory fire-and-forget promises. Replacement processors sweep and execute pending sync requests upon startup with idempotent projection.
 - **GraphQL Admin API (2026-07)**: Synchronizes order and fulfillment state with cursor-based pagination and leaky bucket rate limit cost tracking. Deterministic normalization minimizes PII and consolidates multi-fulfillment tracking numbers. See [shopify-integration.md](./shopify-integration.md).
+
+---
+
+## 14. Real ShipStation V2 Connection & Read-Only Shipment Sync
+
+- **Two Real External Providers**: ShipStation (API V2) represents Reloop's second real external provider, allowing live cross-system reconciliation between real Shopify orders and real ShipStation shipments.
+- **Strict Read-Only Boundary**: Operates strictly in read-only mode (`readCapability: true`, `mutationCapability: false`). Hardcoded base URL (`https://api.shipstation.com/v2`), HTTP `api-key` header authentication, and explicit client-side safety blockers preventing any label purchases, voids, or shipment modifications.
+- **AES-256-GCM Credential Encryption**: API keys are validated against ShipStation V2 before storage and encrypted at rest with versioned AES-256-GCM envelopes. Plaintext keys are never logged, stored in the database, or returned via API.
+- **Safe Semantic Invariants**:
+  - `label_purchased` is normalized to `LABEL_CREATED`, strictly avoiding `SHIPPED`.
+  - ShipStation is shipping/label software, NOT a 3PL warehouse (`ORDER_MISSING_AT_3PL` never triggers for ShipStation).
+  - PII is strictly stripped from payloads prior to normalization and storage.
+- **Durable Background Sync**: Enqueues `SHIPSTATION_SYNC_SHIPMENTS` jobs for durable worker execution with bounded pagination, rate-limit backoff handling (HTTP 429 with `Retry-After`), and idempotent `ExternalReference` projection.
+- **Cross-System Reconciliation**: Deterministic matching compares Shopify `ExternalOrder` projections with ShipStation shipment metadata, detecting authoritative missing tracking (`TRACKING_MISSING_IN_SHOPIFY`), ambiguous shipments (`DUPLICATE_RISK`), and conflicts, while strictly fencing simulator recovery actions. See [shipstation-integration.md](./shipstation-integration.md).

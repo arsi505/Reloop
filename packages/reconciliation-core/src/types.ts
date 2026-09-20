@@ -74,20 +74,37 @@ export interface WarehouseOrderSnapshot {
   error?: ProviderErrorSnapshot;
 }
 
+export interface ShipStationLabelSnapshot {
+  id: string;
+  shipmentId: string;
+  externalShipmentId?: string;
+  trackingNumber: string;
+  carrier?: string;
+  service?: string;
+  status: string;
+  voided: boolean;
+  trackingStatus?: string;
+  createdAt: string;
+}
+
 export interface ShipStationCandidateShipment {
   id: string;
   orderNumber: string;
-  trackingNumber: string;
+  trackingNumber?: string;
   carrier: string;
   status: string;
+  externalShipmentId?: string;
+  labels?: ShipStationLabelSnapshot[];
 }
 
 export interface ShipStationShipmentSnapshot {
   id: string;
   orderNumber: string;
   carrier: string;
-  trackingNumber: string;
+  trackingNumber?: string;
   status: 'PENDING' | 'LABEL_CREATED' | 'IN_TRANSIT' | 'DELIVERED';
+  externalShipmentId?: string;
+  labels?: ShipStationLabelSnapshot[];
   candidateShipments?: ShipStationCandidateShipment[];
   createdAt: string;
   updatedAt: string;

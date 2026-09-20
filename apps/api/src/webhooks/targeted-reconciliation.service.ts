@@ -127,6 +127,8 @@ export class TargetedReconciliationService {
     let shopifySnapshot: ShopifyOrderSnapshot | undefined;
     let warehouseSnapshot: WarehouseOrderSnapshot | undefined;
     let shipstationSnapshot: ShipStationShipmentSnapshot | undefined;
+    const shipstationLabels: any[] = [];
+    let shipstationTrackingNumber = '';
 
     for (const ref of externalOrder.externalReferences) {
       let parsedData: any = {};
@@ -180,19 +182,54 @@ export class TargetedReconciliationService {
           updatedAt: externalOrder.updatedAt.toISOString(),
           error: parsedData.error,
         };
-      } else if (provider === 'SHIPSTATION' || resourceType === 'SHIPSTATION_SHIPMENT') {
-        shipstationSnapshot = {
-          id: ref.externalId,
-          orderNumber,
-          carrier: parsedData.carrier || 'Standard',
-          trackingNumber: parsedData.trackingNumber || '',
-          status: parsedData.status || 'SHIPPED',
-          candidateShipments: parsedData.candidateShipments,
-          createdAt: externalOrder.createdAt.toISOString(),
-          updatedAt: externalOrder.updatedAt.toISOString(),
-          error: parsedData.error,
-        };
+      } else if (provider === 'SHIPSTATION') {
+        if (resourceType === 'LABEL') {
+          shipstationLabels.push({
+            id: ref.externalId,
+            shipmentId: parsedData.shipmentId || '',
+            externalShipmentId: parsedData.externalShipmentId,
+            trackingNumber: parsedData.trackingNumber || '',
+            carrier: parsedData.carrierCode,
+            service: parsedData.serviceCode,
+            status: parsedData.status || 'unknown',
+            voided: parsedData.voided === true,
+            trackingStatus: parsedData.trackingStatus,
+            createdAt: ref.createdAt.toISOString(),
+          });
+        } else if (resourceType === 'TRACKING') {
+          shipstationTrackingNumber = ref.externalId;
+        } else if (resourceType === 'SHIPMENT' || resourceType === 'SHIPSTATION_SHIPMENT') {
+          shipstationSnapshot = {
+            id: ref.externalId,
+            orderNumber,
+            carrier: parsedData.carrier || 'Standard',
+            trackingNumber: parsedData.trackingNumber || '',
+            status: parsedData.status || (externalOrder.status === 'FULFILLING' ? 'LABEL_CREATED' : 'PENDING'),
+            candidateShipments: parsedData.candidateShipments,
+            createdAt: externalOrder.createdAt.toISOString(),
+            updatedAt: externalOrder.updatedAt.toISOString(),
+            error: parsedData.error,
+          };
+        }
       }
+    }
+
+    if (shipstationSnapshot) {
+      shipstationSnapshot.labels = shipstationLabels;
+      if (!shipstationSnapshot.trackingNumber && shipstationTrackingNumber) {
+        shipstationSnapshot.trackingNumber = shipstationTrackingNumber;
+      }
+    } else if (shipstationLabels.length > 0 || shipstationTrackingNumber) {
+      shipstationSnapshot = {
+        id: shipstationLabels[0]?.shipmentId || 'ss-shipment',
+        orderNumber,
+        carrier: shipstationLabels[0]?.carrier || 'Standard',
+        trackingNumber: shipstationTrackingNumber || shipstationLabels[0]?.trackingNumber || '',
+        status: 'LABEL_CREATED',
+        labels: shipstationLabels,
+        createdAt: externalOrder.createdAt.toISOString(),
+        updatedAt: externalOrder.updatedAt.toISOString(),
+      };
     }
 
     const orderSnapshot: NormalizedOrderSnapshot = {
