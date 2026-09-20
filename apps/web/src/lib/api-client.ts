@@ -3,6 +3,22 @@ import {
   MeResponseDto,
   OrganizationDto,
   OrganizationMemberDto,
+  DashboardSummaryDto,
+  PaginatedResponse,
+  ExceptionListItemDto,
+  ExceptionDetailDto,
+  OrderListItemDto,
+  OrderDetailDto,
+  RecoveryListItemDto,
+  RecoveryDetailDto,
+  IntegrationCardDto,
+  IntegrationOperationsDetailDto,
+  RecoveryCaseStatus,
+  RecoveryLevel,
+  RecoveryCaseType,
+  IntegrationProvider,
+  ExternalOrderStatus,
+  WorkflowStatus,
 } from '@reloop/contracts';
 
 const API_BASE_URL =
@@ -77,7 +93,13 @@ export async function fetchWithAuth<T>(
     credentials: 'include',
   });
 
-  if (response.status === 401 && !isRetry && !endpoint.includes('/auth/refresh') && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
+  if (
+    response.status === 401 &&
+    !isRetry &&
+    !endpoint.includes('/auth/refresh') &&
+    !endpoint.includes('/auth/login') &&
+    !endpoint.includes('/auth/register')
+  ) {
     const newToken = await refreshAccessTokenSingleFlight();
     if (newToken) {
       return fetchWithAuth<T>(endpoint, options, true);
@@ -100,6 +122,50 @@ export async function fetchWithAuth<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+function buildQueryString<T extends object>(params?: T): string {
+  if (!params) return '';
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.append(key, String(value));
+    }
+  }
+  const str = searchParams.toString();
+  return str ? `?${str}` : '';
+}
+
+export interface ExceptionsQuery {
+  page?: number;
+  pageSize?: number;
+  sortOrder?: 'asc' | 'desc';
+  status?: RecoveryCaseStatus;
+  recoveryLevel?: RecoveryLevel;
+  type?: RecoveryCaseType;
+  provider?: IntegrationProvider;
+  startDate?: string;
+  endDate?: string;
+  search?: string;
+}
+
+export interface OrdersQuery {
+  page?: number;
+  pageSize?: number;
+  sortOrder?: 'asc' | 'desc';
+  status?: ExternalOrderStatus;
+  provider?: IntegrationProvider;
+  hasException?: boolean;
+  search?: string;
+}
+
+export interface RecoveriesQuery {
+  page?: number;
+  pageSize?: number;
+  sortOrder?: 'asc' | 'desc';
+  status?: WorkflowStatus;
+  recoveryLevel?: RecoveryLevel;
+  search?: string;
 }
 
 export const apiClient = {
@@ -185,5 +251,45 @@ export const apiClient = {
 
   async getOrganizationMembers(): Promise<OrganizationMemberDto[]> {
     return fetchWithAuth<OrganizationMemberDto[]>('/organizations/current/members');
+  },
+
+  // ==========================================
+  // Operations & Reliability Read API
+  // ==========================================
+
+  async getDashboardSummary(): Promise<DashboardSummaryDto> {
+    return fetchWithAuth<DashboardSummaryDto>('/dashboard/summary');
+  },
+
+  async getExceptions(query?: ExceptionsQuery): Promise<PaginatedResponse<ExceptionListItemDto>> {
+    return fetchWithAuth<PaginatedResponse<ExceptionListItemDto>>(`/exceptions${buildQueryString(query)}`);
+  },
+
+  async getExceptionDetail(id: string): Promise<ExceptionDetailDto> {
+    return fetchWithAuth<ExceptionDetailDto>(`/exceptions/${encodeURIComponent(id)}`);
+  },
+
+  async getOrders(query?: OrdersQuery): Promise<PaginatedResponse<OrderListItemDto>> {
+    return fetchWithAuth<PaginatedResponse<OrderListItemDto>>(`/orders${buildQueryString(query)}`);
+  },
+
+  async getOrderDetail(id: string): Promise<OrderDetailDto> {
+    return fetchWithAuth<OrderDetailDto>(`/orders/${encodeURIComponent(id)}`);
+  },
+
+  async getRecoveries(query?: RecoveriesQuery): Promise<PaginatedResponse<RecoveryListItemDto>> {
+    return fetchWithAuth<PaginatedResponse<RecoveryListItemDto>>(`/recoveries${buildQueryString(query)}`);
+  },
+
+  async getRecoveryDetail(id: string): Promise<RecoveryDetailDto> {
+    return fetchWithAuth<RecoveryDetailDto>(`/recoveries/${encodeURIComponent(id)}`);
+  },
+
+  async getIntegrations(): Promise<IntegrationCardDto[]> {
+    return fetchWithAuth<IntegrationCardDto[]>('/integrations');
+  },
+
+  async getIntegrationDetail(id: string): Promise<IntegrationOperationsDetailDto> {
+    return fetchWithAuth<IntegrationOperationsDetailDto>(`/integrations/${encodeURIComponent(id)}`);
   },
 };

@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(res.user);
     setOrganization(res.organization);
     setRole(res.role);
-    router.push('/app');
+    router.push('/dashboard');
   };
 
   const register = async (data: {
@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(res.user);
     setOrganization(res.organization);
     setRole(res.role);
-    router.push('/app');
+    router.push('/dashboard');
   };
 
   const logout = async () => {

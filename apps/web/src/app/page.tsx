@@ -42,7 +42,7 @@ export default function Home() {
         <div className="space-y-3 border-t border-slate-700/60 pt-5">
           <div className="flex justify-between text-xs text-slate-400">
             <span className="font-medium text-slate-300">Tenant Dashboard</span>
-            <Link href="/app" className="text-blue-400 hover:underline">/app</Link>
+            <Link href="/dashboard" className="text-blue-400 hover:underline">/dashboard</Link>
           </div>
           <div className="flex justify-between text-xs text-slate-400">
             <span className="font-medium text-slate-300">Web App (Next.js)</span>
