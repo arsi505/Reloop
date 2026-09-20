@@ -11,6 +11,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { OperationsModule } from './operations/operations.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
     ApprovalsModule,
     WebhooksModule,
     IntegrationsModule,
+    OperationsModule,
   ],
   providers: [
     {

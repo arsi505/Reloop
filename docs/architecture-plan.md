@@ -201,3 +201,14 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
   - PII is strictly stripped from payloads prior to normalization and storage.
 - **Durable Background Sync**: Enqueues `SHIPSTATION_SYNC_SHIPMENTS` jobs for durable worker execution with bounded pagination, rate-limit backoff handling (HTTP 429 with `Retry-After`), and idempotent `ExternalReference` projection.
 - **Cross-System Reconciliation**: Deterministic matching compares Shopify `ExternalOrder` projections with ShipStation shipment metadata, detecting authoritative missing tracking (`TRACKING_MISSING_IN_SHOPIFY`), ambiguous shipments (`DUPLICATE_RISK`), and conflicts, while strictly fencing simulator recovery actions. See [shipstation-integration.md](./shipstation-integration.md).
+
+---
+
+## 15. Operations API, Integration Health & Exception Read Model
+
+- **Product-Facing Read API**: Converts internal PostgreSQL reliability states into clean, tenant-safe DTO projections serving frontend operational surfaces (Dashboard, Exceptions, Orders, Recoveries, Integrations) without exposing internal Prisma schemas, Job attempts, or raw provider bodies.
+- **Strict Read-Only Guarantee**: All operations endpoints (`/dashboard/summary`, `/exceptions`, `/orders`, `/recoveries`, `/integrations`) are strictly `GET`. Existing Day 11 approval and rejection endpoints remain the authoritative mutation paths.
+- **Zero Secrets & Zero PII**: Strict recursive DTO filtering guarantees `encryptedCredentials`, access tokens, API keys, and customer PII (street address, email, phone) are never returned.
+- **Deterministic Integration Health**: Provider health (`HEALTHY`, `DEGRADED`, `DISCONNECTED`, `SYNCING`) is derived deterministically from durable records. Connected-but-failing sync pipelines are marked `DEGRADED`, preventing false healthy indicators.
+- **Flight Recorder Timelines**: Chronological timelines reconstruct execution facts strictly from durable database records (`RecoveryCase`, `Workflow`, `WorkflowStep`, `Approval`, `JobAttempt`).
+- **Standardized Pagination & RBAC**: Consistent `{ items, page, pageSize, total, totalPages }` contract across all list endpoints with query validation. `OWNER`, `ADMIN`, `OPERATOR`, and `VIEWER` roles possess read access. See [operations-api.md](./operations-api.md).

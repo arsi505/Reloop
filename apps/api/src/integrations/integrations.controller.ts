@@ -25,6 +25,11 @@ import { ConnectShipStationDto } from './dto/connect-shipstation.dto';
 import { ShopifyCallbackQueryDto } from './dto/shopify-callback-query.dto';
 import { IntegrationStatusResponseDto } from './dto/integration-status-response.dto';
 import { ShipStationConnectionService } from './shipstation-connection.service';
+import { IntegrationHealthService } from '../operations/services/integration-health.service';
+import {
+  IntegrationCardDto,
+  IntegrationOperationsDetailDto,
+} from '../operations/dto/integrations-operations.dto';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -35,6 +40,7 @@ export class IntegrationsController {
     private readonly shopifyOAuth: ShopifyOAuthService,
     private readonly shopifySync: ShopifySyncService,
     private readonly shipstationConnection: ShipStationConnectionService,
+    private readonly integrationHealth: IntegrationHealthService,
   ) {}
 
   /**
@@ -102,6 +108,19 @@ export class IntegrationsController {
   }
 
   /**
+   * Retrieves tenant-safe provider cards for all integrations in the organization.
+   * Accessible by OWNER, ADMIN, OPERATOR, VIEWER.
+   */
+  @Get()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.OWNER, Role.ADMIN, Role.OPERATOR, Role.VIEWER)
+  async listIntegrations(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<IntegrationCardDto[]> {
+    return this.integrationHealth.listIntegrationCards(user.organizationId);
+  }
+
+  /**
    * Retrieves safe integration status.
    * Accessible by all organization roles: OWNER, ADMIN, OPERATOR, VIEWER.
    * Strictly never returns encrypted or plaintext credentials.
@@ -138,6 +157,20 @@ export class IntegrationsController {
       createdAt: integration.createdAt,
       updatedAt: integration.updatedAt,
     };
+  }
+
+  /**
+   * Retrieves operational detail for a specific integration.
+   * Accessible by all organization roles: OWNER, ADMIN, OPERATOR, VIEWER.
+   */
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.OWNER, Role.ADMIN, Role.OPERATOR, Role.VIEWER)
+  async getIntegrationDetail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<IntegrationOperationsDetailDto> {
+    return this.integrationHealth.getIntegrationDetail(user.organizationId, id);
   }
 
   /**

@@ -7,8 +7,10 @@ import { ShopifyTokenRefreshService } from './shopify-token-refresh.service';
 import { ShopifySyncService } from './shopify-sync.service';
 import { ShipStationConnectionService } from './shipstation-connection.service';
 
+import { OperationsModule } from '../operations/operations.module';
+
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, OperationsModule],
   controllers: [IntegrationsController],
   providers: [
     ShopifyOAuthService,
