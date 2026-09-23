@@ -222,3 +222,15 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **JWT Handshake Authentication & Tenant Room Binding**: Sockets authenticate via JWT in handshake authorization payload (`auth.token`). The gateway verifies active organization membership in PostgreSQL and binds sockets strictly to `org:<organizationId>`. Cross-tenant event leakage is architecturally impossible.
 - **Zero Client Mutations**: Client-to-server business mutation commands over WebSockets are systematically rejected. All operations (Approve, Reject, Connect, Disconnect) are performed exclusively via authenticated REST routes.
 - **Multi-Instance Compatibility**: API servers subscribe to Redis Pub/Sub channels on startup, ensuring that worker-driven step completions, webhook reconciliation cases, and admin actions propagate instantly to all active socket sessions across server instances. See [realtime-architecture.md](./realtime-architecture.md).
+
+---
+
+## 17. Reliability, Stress Validation & Failure Injection (Day 21)
+
+- **Comprehensive Empirical Stress Validation**: Rigorously proved Reloop's distributed reliability claims under realistic load, network partitions, and concurrent failure scenarios against isolated test infrastructure (`reloop_test` PostgreSQL on 5433, Redis 7 on 6380).
+- **Sub-200ms API Read Latency**: Under sustained read traffic, all operational endpoints achieved sub-200ms p95 latencies (`/dashboard/summary`: 141.6ms p95, `/exceptions`: 33.5ms p95, `/orders`: 44.2ms p95, `/recoveries`: 38.9ms p95, `/integrations`: 31.9ms p95).
+- **High-Throughput Distributed Scheduling & Worker Engine**: Atomic scheduling sustained 2,221.1 jobs/sec. A 10,000-job stress test workload completed with 100% success (0 remaining, 0 dead-lettered, 0 blocked, 0 duplicate executions, 259.3 jobs/sec overall across 5 workers with 50 concurrency).
+- **Zero Duplicate Side-Effects Under Crash Failure**: Worker crashes during `RUNNING` status are classified as ambiguous crashes and placed into `BLOCKED` status (`AMBIGUOUS_WORKER_CRASH`) with zero blind re-executions, preventing duplicate external mutations. Expired leases in `CLAIMED` status cleanly transition the abandoned attempt to `ABANDONED` and resume execution on a replacement worker.
+- **Race-Safe Concurrency & Routing Invariants**: Simultaneous approvals on the same step enforce atomic CAS semantics, guaranteeing exactly 1 winner and 1 conflict rejection. Case routing and detection enforce strict transactional advisory locking and deduplication, ensuring zero duplicate active workflows or cases.
+- **Post-Load Database Invariant Verification**: Exhaustive SQL diagnostic audit verified 0 orphaned JobAttempts, 0 duplicate active workflows per case, 0 duplicate active cases per dedupeKey, 0 duplicate idempotency keys, and 0 resolved cases lacking verified resolution timestamps. See [reliability-benchmark.md](./reliability-benchmark.md).
+
