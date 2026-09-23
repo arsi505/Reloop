@@ -20,11 +20,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const status =
       exception instanceof HttpException
         ? exception.getStatus()
+        : typeof (exception as any)?.status === 'number'
+        ? (exception as any).status
+        : typeof (exception as any)?.statusCode === 'number'
+        ? (exception as any).statusCode
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
     const message =
       exception instanceof HttpException
         ? exception.getResponse()
+        : status === HttpStatus.PAYLOAD_TOO_LARGE
+        ? 'Payload too large'
+        : status === HttpStatus.BAD_REQUEST
+        ? 'Bad request'
         : 'Internal server error';
 
     this.logger.error(
