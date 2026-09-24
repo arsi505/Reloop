@@ -52,6 +52,7 @@ export class WorkflowCoordinator {
   private isRunning: boolean = false;
   private isTickRunning: boolean = false;
   private timer: NodeJS.Timeout | null = null;
+  private workflowScanCursor: { createdAt: Date; id: string } | null = null;
 
   private metrics: WorkflowCoordinatorMetrics = {
     scannedCount: 0,
@@ -150,14 +151,52 @@ export class WorkflowCoordinator {
     };
 
     try {
-      // 1. Fetch active workflows: PENDING, RUNNING, or WAITING
-      const workflows = await this.prisma.workflow.findMany({
-        where: {
-          status: { in: [WorkflowStatus.PENDING, WorkflowStatus.RUNNING, WorkflowStatus.WAITING] },
-        },
-        orderBy: { createdAt: 'asc' },
-        take: this.scanBatchSize,
+      // 1. Fetch a bounded, fair page of coordinator-actionable workflows.
+      // A WAITING workflow with a live PENDING human approval is passive until
+      // the decision or expiry changes authoritative database state.
+      const now = new Date();
+      const actionableWhere: Prisma.WorkflowWhereInput = {
+        OR: [
+          { status: { in: [WorkflowStatus.PENDING, WorkflowStatus.RUNNING] } },
+          {
+            status: WorkflowStatus.WAITING,
+            steps: {
+              none: {
+                status: WorkflowStepStatus.WAITING,
+                approvals: {
+                  some: {
+                    status: ApprovalStatus.PENDING,
+                    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      };
+      const cursorWhere: Prisma.WorkflowWhereInput | undefined = this.workflowScanCursor
+        ? {
+            OR: [
+              { createdAt: { gt: this.workflowScanCursor.createdAt } },
+              {
+                createdAt: this.workflowScanCursor.createdAt,
+                id: { gt: this.workflowScanCursor.id },
+              },
+            ],
+          }
+        : undefined;
+      const page = await this.prisma.workflow.findMany({
+        where: cursorWhere ? { AND: [actionableWhere, cursorWhere] } : actionableWhere,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: this.scanBatchSize + 1,
       });
+      const hasMore = page.length > this.scanBatchSize;
+      const workflows = page.slice(0, this.scanBatchSize);
+      const lastWorkflow = workflows[workflows.length - 1];
+      this.workflowScanCursor =
+        hasMore && lastWorkflow
+          ? { createdAt: lastWorkflow.createdAt, id: lastWorkflow.id }
+          : null;
 
       result.scanned = workflows.length;
 
