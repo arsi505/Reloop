@@ -415,27 +415,35 @@ describe('Shopify OAuth & Credential Security E2E', () => {
         expect(callbackRes.body.success).toBe(true);
         const integrationId = callbackRes.body.integrationId;
 
-        // 4. Verify durable Job was committed to DB before sync starts
-        const durableJob = await prisma.job.findFirst({
-          where: {
-            organizationId: orgId,
-            type: 'SHOPIFY_SYNC_ORDERS',
-            payload: {
-              path: ['integrationId'],
-              equals: integrationId,
-            },
-          },
-        });
-
-        expect(durableJob).toBeDefined();
-        expect(durableJob?.status).toBe('QUEUED');
-
-        // Verify Integration shows initialSyncStatus: PENDING
+        // 4. Verify activation and its durable initial Job committed atomically.
         const integrationBeforeSync = await prisma.integration.findUnique({
           where: { id: integrationId },
         });
         const configBefore = (integrationBeforeSync?.configuration as Record<string, any>) || {};
-        expect(configBefore.initialSyncStatus).toBe('PENDING');
+        expect(integrationBeforeSync).toMatchObject({
+          id: integrationId,
+          organizationId: orgId,
+          provider: 'SHOPIFY',
+        });
+        expect(configBefore.initialSyncStatus).toBe('SYNCING');
+        expect(configBefore.activeSyncRunId).toEqual(expect.any(String));
+
+        const activeSyncRunId = configBefore.activeSyncRunId as string;
+        const durableJob = await prisma.job.findUnique({
+          where: { id: activeSyncRunId },
+        });
+        const durablePayload = (durableJob?.payload as Record<string, unknown>) || {};
+        expect(durableJob).toMatchObject({
+          id: activeSyncRunId,
+          organizationId: orgId,
+          type: 'SHOPIFY_SYNC_ORDERS',
+          status: 'QUEUED',
+        });
+        expect(durablePayload).toMatchObject({
+          integrationId,
+          shopDomain: 'crash-recovery-store.myshopify.com',
+          syncRunId: activeSyncRunId,
+        });
 
         // 5. Simulate API Process Crash & Replacement Processor Startup
         // The API process is "dead". We now start the replacement processor (ShopifySyncService)
@@ -496,7 +504,10 @@ describe('Shopify OAuth & Credential Security E2E', () => {
 
         // 8. Re-run sweep (idempotency check: at-least-once retry)
         // Ensure rereading same page does not create duplicate orders or RecoveryCases
-        await syncService.syncRecentOrders(integrationId, { fetchFn: mockGraphQLFetch });
+        await syncService.syncRecentOrders(integrationId, {
+          fetchFn: mockGraphQLFetch,
+          syncRunId: activeSyncRunId,
+        });
 
         const externalOrderCount = await prisma.externalOrder.count({
           where: {

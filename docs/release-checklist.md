@@ -42,8 +42,11 @@
 
 - [x] Monorepo linting passes with 0 errors across 14 workspaces (`npm run lint`).
 - [x] Monorepo TypeScript typecheck passes with 0 errors across 14 packages (`npm run typecheck`).
-- [x] 518 unit and integration tests passing (`npm run test`).
+- [x] 478 unit and integration tests passing across 45 suites (`npm run test`).
+- [x] 150 API E2E tests passing across 10 suites (`npm run test:e2e --workspace=@reloop/api`).
+- [x] 17 simulator E2E tests passing (`npm run test:e2e --workspace=@reloop/simulator`).
 - [x] Monorepo production build completes with 0 errors (`npm run build`).
+- [x] Automated audit blockers RA-01, RA-02, and RA-03 remediated; automated acceptance baseline green.
 - [x] Zero `.env` files tracked in git (`git ls-files | Select-String -Pattern "\.env$"`).
 - [x] Working tree clean and free of whitespace warnings (`git diff --check`).
 

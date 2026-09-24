@@ -28,6 +28,7 @@ export class WebhookEventProcessorService
   private readonly adapterRegistry: WebhookAdapterRegistry;
 
   private timer: NodeJS.Timeout | null = null;
+  private activeTick: Promise<unknown> | null = null;
   private readonly pendingDispatches = new Set<NodeJS.Immediate>();
   private running = false;
   private acceptingBackgroundWork = true;
@@ -77,15 +78,22 @@ export class WebhookEventProcessorService
       `[Reloop WebhookProcessor] Started durable recovery scanner (interval: ${this.intervalMs}ms, staleThreshold: ${this.staleThresholdMs}ms, batchSize: ${this.batchSize})`,
     );
 
-    this.timer = setInterval(async () => {
-      try {
-        await this.tick();
-      } catch (err: any) {
-        this.logger.error(
-          `[Reloop WebhookProcessor] Error in scan tick: ${err.message}`,
-          err.stack,
-        );
-      }
+    this.timer = setInterval(() => {
+      if (!this.acceptingBackgroundWork || this.activeTick) return;
+
+      const activeTick = this.tick()
+        .catch((err: any) => {
+          this.logger.error(
+            `[Reloop WebhookProcessor] Error in scan tick: ${err.message}`,
+            err.stack,
+          );
+        })
+        .finally(() => {
+          if (this.activeTick === activeTick) {
+            this.activeTick = null;
+          }
+        });
+      this.activeTick = activeTick;
     }, this.intervalMs);
   }
 
@@ -102,11 +110,12 @@ export class WebhookEventProcessorService
     }
     this.pendingDispatches.clear();
 
+    const activeTick = this.activeTick;
+    if (activeTick) {
+      await Promise.allSettled([activeTick]);
+    }
     if (this.inFlight.size > 0) {
       await Promise.allSettled([...this.inFlight.values()]);
-    }
-    while (this.isTicking) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
     }
     this.logger.log('[Reloop WebhookProcessor] Stopped durable recovery scanner.');
   }
