@@ -3,6 +3,7 @@ import { WorkerConfig, loadWorkerConfig } from './config';
 import { WorkerService } from './worker-service';
 import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
 import { JobExecutorRegistry } from './executor';
+import { RecoveryActionExecutor } from '@reloop/connector-simulator';
 
 export interface WorkerRuntime {
   config: WorkerConfig;
@@ -17,7 +18,7 @@ export interface WorkerRuntime {
 export interface CreateWorkerRuntimeOptions {
   config?: Partial<WorkerConfig>;
   prisma?: PrismaClient;
-  actionExecutor?: any;
+  actionExecutor?: RecoveryActionExecutor;
 }
 
 /**

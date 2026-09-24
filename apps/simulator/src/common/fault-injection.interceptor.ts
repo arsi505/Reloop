@@ -6,7 +6,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import { Observable, from, throwError } from 'rxjs';
+import { Observable, from, of, throwError } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { Request, Response } from 'express';
 import { SimulatorStateService } from '../state/simulator-state.service';
@@ -38,6 +38,15 @@ export class FaultInjectionInterceptor implements NestInterceptor {
     const fault = this.stateService.getMatchingFault(provider, method, path);
     if (!fault) {
       return next.handle();
+    }
+
+    // Keep this comparison tolerant of an older generated connector declaration
+    // when the simulator source is compiled directly by another workspace test.
+    if ((fault.fault as string) === 'SUCCESS_WITHOUT_COMMIT') {
+      return of({
+        success: true,
+        simulated: 'response returned without applying provider mutation',
+      });
     }
 
     switch (fault.fault) {

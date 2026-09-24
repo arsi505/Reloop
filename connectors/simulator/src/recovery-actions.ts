@@ -86,14 +86,26 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
   private auditLog: SimulatorMutationAuditEntry[] = [];
   private mutationCounts = new Map<string, number>();
 
-  // In-memory store fallback when HTTP simulator URL is not running
+  // Explicit in-memory store for unit tests that construct the adapter without a URL.
   private inMemoryShopifyOrders = new Map<string, ShopifyOrder>();
   private inMemoryWarehouseOrders = new Map<string, WarehouseOrder>();
 
   // Optional ambiguity hook for testing commit-then-timeout
   public simulateCommitThenTimeoutForOperations = new Set<string>();
 
-  constructor(private readonly baseUrl?: string) {}
+  private readonly baseUrl?: string;
+
+  constructor(baseUrl?: string) {
+    if (baseUrl) {
+      const parsed = new URL(baseUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(
+          `Invalid simulator recovery URL protocol "${parsed.protocol}"; expected http: or https:`,
+        );
+      }
+      this.baseUrl = parsed.toString().replace(/\/$/, '');
+    }
+  }
 
   /**
    * Seeds in-memory state for testing without running HTTP simulator server.
@@ -124,23 +136,16 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
 
   async fetchAuthoritativeOrderState(orderNumber: string): Promise<AuthoritativeOrderState> {
     if (this.baseUrl) {
-      try {
-        const [shpRes, whRes] = await Promise.all([
-          fetch(`${this.baseUrl}/shopify/orders/${orderNumber}`).then((r) =>
-            r.ok ? ((r.json() as unknown) as ShopifyOrder) : null,
-          ),
-          fetch(`${this.baseUrl}/3pl/orders/search?orderNumber=${orderNumber}`).then((r) =>
-            r.ok ? ((r.json() as unknown) as WarehouseOrder) : null,
-          ),
-        ]);
-        return {
-          orderNumber,
-          shopify: shpRes,
-          warehouse: whRes,
-        };
-      } catch {
-        // Fallback to in-memory if network error
-      }
+      const encodedOrderNumber = encodeURIComponent(orderNumber);
+      const [shopify, warehouse] = await Promise.all([
+        this.fetchOptional<ShopifyOrder>(
+          `/shopify/orders/${encodedOrderNumber}`,
+        ),
+        this.fetchOptional<WarehouseOrder>(
+          `/3pl/orders/search?orderNumber=${encodedOrderNumber}`,
+        ),
+      ]);
+      return { orderNumber, shopify, warehouse };
     }
 
     return {
@@ -167,8 +172,9 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
     // Apply mutation
     let updatedOrder: ShopifyOrder | null = null;
     if (this.baseUrl) {
+      let response: Response;
       try {
-        const res = await fetch(`${this.baseUrl}/shopify/orders/${orderNumber}/fulfill`, {
+        response = await fetch(`${this.baseUrl}/shopify/orders/${encodeURIComponent(orderNumber)}/fulfill`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
@@ -180,23 +186,48 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
             fulfillmentStatus: 'FULFILLED',
           }),
         });
-        if (res.ok) {
-          updatedOrder = (await res.json()) as ShopifyOrder;
-        }
-      } catch {
-        // Fallback to in-memory
+      } catch (error: unknown) {
+        return this.recordError(
+          params,
+          'UPDATE_TRACKING',
+          operationKey,
+          callCount,
+          `Simulator Shopify update request failed: ${this.errorMessage(error)}`,
+        );
       }
-    }
 
-    // In-memory update
-    const existing = this.inMemoryShopifyOrders.get(orderNumber);
-    if (existing) {
-      existing.trackingNumber = trackingNumber;
-      if (carrier) existing.carrier = carrier;
-      existing.fulfillmentStatus = 'FULFILLED';
-      existing.updatedAt = new Date().toISOString();
-      this.inMemoryShopifyOrders.set(orderNumber, existing);
-      updatedOrder = existing;
+      if (!response.ok) {
+        const code = await this.readErrorCode(response);
+        if (code === 'COMMIT_THEN_TIMEOUT') {
+          return this.recordAmbiguous(
+            params,
+            'UPDATE_TRACKING',
+            operationKey,
+            callCount,
+            'Ambiguous commit-then-timeout received from simulator',
+          );
+        }
+        return this.recordError(
+          params,
+          'UPDATE_TRACKING',
+          operationKey,
+          callCount,
+          `Simulator Shopify update failed with HTTP ${response.status}`,
+        );
+      }
+
+      updatedOrder = (await response.json()) as ShopifyOrder;
+    } else {
+      // Explicit unit-test-only in-memory mode.
+      const existing = this.inMemoryShopifyOrders.get(orderNumber);
+      if (existing) {
+        existing.trackingNumber = trackingNumber;
+        if (carrier) existing.carrier = carrier;
+        existing.fulfillmentStatus = 'FULFILLED';
+        existing.updatedAt = new Date().toISOString();
+        this.inMemoryShopifyOrders.set(orderNumber, existing);
+        updatedOrder = existing;
+      }
     }
 
     if (shouldSimulateTimeout) {
@@ -263,33 +294,82 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
 
     // Apply mutation to 3PL
     let createdOrder: WarehouseOrder | null = null;
-    const existingByRef = externalReference
-      ? this.inMemoryWarehouseOrders.get(externalReference)
-      : undefined;
-    const existingByNum = this.inMemoryWarehouseOrders.get(orderNumber);
+    if (this.baseUrl) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}/3pl/orders`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': operationKey,
+          },
+          body: JSON.stringify({
+            orderNumber,
+            externalReference,
+            customer,
+            shippingAddress,
+            lineItems,
+          }),
+        });
+      } catch (error: unknown) {
+        return this.recordError(
+          params,
+          'CREATE_3PL_ORDER',
+          operationKey,
+          callCount,
+          `Simulator 3PL create request failed: ${this.errorMessage(error)}`,
+        );
+      }
 
-    if (existingByRef || existingByNum) {
-      // Idempotent hit: already exists!
-      createdOrder = existingByRef || existingByNum!;
+      if (!response.ok) {
+        const code = await this.readErrorCode(response);
+        if (code === 'COMMIT_THEN_TIMEOUT') {
+          return this.recordAmbiguous(
+            params,
+            'CREATE_3PL_ORDER',
+            operationKey,
+            callCount,
+            'Ambiguous commit-then-timeout from warehouse simulator',
+          );
+        }
+        return this.recordError(
+          params,
+          'CREATE_3PL_ORDER',
+          operationKey,
+          callCount,
+          `Simulator 3PL create failed with HTTP ${response.status}`,
+        );
+      }
+
+      createdOrder = (await response.json()) as WarehouseOrder;
     } else {
-      createdOrder = {
-        id: `wh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        orderNumber,
-        externalReference: externalReference || orderNumber,
-        customer: customer || { name: 'Customer', email: 'cust@example.com' },
-        shippingAddress: shippingAddress || {
-          street: '123 Main St',
-          city: 'Anytown',
-          state: 'CA',
-          postalCode: '90001',
-          country: 'US',
-        },
-        lineItems: lineItems || [{ sku: 'SKU-DEFAULT', name: 'Item', quantity: 1, price: 10 }],
-        status: 'RECEIVED',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      this.seedWarehouseOrder(createdOrder);
+      const existingByRef = externalReference
+        ? this.inMemoryWarehouseOrders.get(externalReference)
+        : undefined;
+      const existingByNum = this.inMemoryWarehouseOrders.get(orderNumber);
+
+      if (existingByRef || existingByNum) {
+        createdOrder = existingByRef || existingByNum!;
+      } else {
+        createdOrder = {
+          id: `wh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          orderNumber,
+          externalReference: externalReference || orderNumber,
+          customer: customer || { name: 'Customer', email: 'cust@example.com' },
+          shippingAddress: shippingAddress || {
+            street: '123 Main St',
+            city: 'Anytown',
+            state: 'CA',
+            postalCode: '90001',
+            country: 'US',
+          },
+          lineItems: lineItems || [{ sku: 'SKU-DEFAULT', name: 'Item', quantity: 1, price: 10 }],
+          status: 'RECEIVED',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        this.seedWarehouseOrder(createdOrder);
+      }
     }
 
     if (shouldSimulateTimeout) {
@@ -326,7 +406,7 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
     return {
       success: true,
       operationKey,
-      externalId: createdOrder.id,
+      externalId: createdOrder?.id,
       data: createdOrder,
     };
   }
@@ -345,13 +425,63 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
 
     const shouldSimulateTimeout = this.simulateCommitThenTimeoutForOperations.has(operationKey);
 
-    const existing = this.inMemoryShopifyOrders.get(orderNumber);
-    if (existing) {
-      existing.fulfillmentStatus = 'FULFILLED';
-      if (trackingNumber) existing.trackingNumber = trackingNumber;
-      if (carrier) existing.carrier = carrier;
-      existing.updatedAt = new Date().toISOString();
-      this.inMemoryShopifyOrders.set(orderNumber, existing);
+    let updatedOrder: ShopifyOrder | null = null;
+    if (this.baseUrl) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}/shopify/orders/${encodeURIComponent(orderNumber)}/fulfill`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': operationKey,
+          },
+          body: JSON.stringify({
+            trackingNumber,
+            carrier,
+            fulfillmentStatus: 'FULFILLED',
+          }),
+        });
+      } catch (error: unknown) {
+        return this.recordError(
+          params,
+          'MARK_FULFILLED',
+          operationKey,
+          callCount,
+          `Simulator Shopify fulfillment request failed: ${this.errorMessage(error)}`,
+        );
+      }
+
+      if (!response.ok) {
+        const code = await this.readErrorCode(response);
+        if (code === 'COMMIT_THEN_TIMEOUT') {
+          return this.recordAmbiguous(
+            params,
+            'MARK_FULFILLED',
+            operationKey,
+            callCount,
+            'Ambiguous commit-then-timeout from Shopify fulfillment',
+          );
+        }
+        return this.recordError(
+          params,
+          'MARK_FULFILLED',
+          operationKey,
+          callCount,
+          `Simulator Shopify fulfillment failed with HTTP ${response.status}`,
+        );
+      }
+
+      updatedOrder = (await response.json()) as ShopifyOrder;
+    } else {
+      const existing = this.inMemoryShopifyOrders.get(orderNumber);
+      if (existing) {
+        existing.fulfillmentStatus = 'FULFILLED';
+        if (trackingNumber) existing.trackingNumber = trackingNumber;
+        if (carrier) existing.carrier = carrier;
+        existing.updatedAt = new Date().toISOString();
+        this.inMemoryShopifyOrders.set(orderNumber, existing);
+        updatedOrder = existing;
+      }
     }
 
     if (shouldSimulateTimeout) {
@@ -370,7 +500,7 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
         ambiguous: true,
         operationKey,
         error: 'Ambiguous commit-then-timeout from Shopify fulfillment',
-        data: existing,
+        data: updatedOrder,
       };
     }
 
@@ -388,8 +518,84 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
     return {
       success: true,
       operationKey,
-      externalId: existing?.id,
-      data: existing,
+      externalId: updatedOrder?.id,
+      data: updatedOrder,
     };
+  }
+
+  private async fetchOptional<T>(path: string): Promise<T | null> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`);
+    } catch (error: unknown) {
+      throw new Error(
+        `Simulator authoritative-state request failed for ${path}: ${this.errorMessage(error)}`,
+      );
+    }
+
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Simulator authoritative-state request failed for ${path}: HTTP ${response.status}`,
+      );
+    }
+    return (await response.json()) as T;
+  }
+
+  private async readErrorCode(response: Response): Promise<string | undefined> {
+    try {
+      const body = (await response.json()) as {
+        error?: { code?: string };
+      };
+      return body.error?.code;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private recordError(
+    params: UpdateTrackingParams | Create3PLOrderParams | MarkFulfilledParams,
+    operationType: SimulatorMutationAuditEntry['operationType'],
+    operationKey: string,
+    callCount: number,
+    error: string,
+  ): RecoveryActionResult {
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      organizationId: params.organizationId,
+      recoveryCaseId: params.recoveryCaseId,
+      operationType,
+      operationKey,
+      callCount,
+      result: 'ERROR',
+      details: { orderNumber: params.orderNumber },
+    });
+    return { success: false, operationKey, error };
+  }
+
+  private recordAmbiguous(
+    params: UpdateTrackingParams | Create3PLOrderParams | MarkFulfilledParams,
+    operationType: SimulatorMutationAuditEntry['operationType'],
+    operationKey: string,
+    callCount: number,
+    error: string,
+  ): RecoveryActionResult {
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      organizationId: params.organizationId,
+      recoveryCaseId: params.recoveryCaseId,
+      operationType,
+      operationKey,
+      callCount,
+      result: 'AMBIGUOUS_TIMEOUT',
+      details: { orderNumber: params.orderNumber },
+    });
+    return { success: false, ambiguous: true, operationKey, error };
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

@@ -14,6 +14,7 @@ import { RecoveryRouterScanner } from './recovery-router-scanner';
 import { CaseDetectionService } from './case-detection/case-detection.service';
 import { ReconciliationScanner, OrderSnapshotProvider } from './reconciliation-scanner';
 import { CaseResolutionService } from './case-resolution/case-resolution.service';
+import { SimulatorOrderSnapshotProvider } from './simulator-snapshot-provider';
 
 export interface SchedulerRuntime {
   config: SchedulerConfig;
@@ -57,11 +58,14 @@ export function createSchedulerRuntime(
   const recoveryRouterScanner = new RecoveryRouterScanner(prisma, routerService, config);
 
   const caseDetectionService = new CaseDetectionService(prisma);
+  const snapshotProvider =
+    options.snapshotProvider ??
+    new SimulatorOrderSnapshotProvider(prisma, config.simulatorBaseUrl);
   const reconciliationScanner = new ReconciliationScanner(
     prisma,
     caseDetectionService,
     config,
-    options.snapshotProvider,
+    snapshotProvider,
   );
 
   const publisher = new RedisPublisher(config);

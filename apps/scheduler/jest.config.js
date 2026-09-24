@@ -8,6 +8,8 @@ module.exports = {
       {
         tsconfig: {
           types: ['node', 'jest'],
+          experimentalDecorators: true,
+          emitDecoratorMetadata: true,
         },
       },
     ],

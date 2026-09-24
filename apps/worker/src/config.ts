@@ -5,6 +5,7 @@ dotenv.config();
 
 export interface WorkerConfig {
   redisUrl: string;
+  simulatorBaseUrl: string;
   databaseUrl?: string;
   jobStreamKey: string;
   jobConsumerGroup: string;
@@ -25,6 +26,10 @@ export interface WorkerConfig {
 
 export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
   const redisUrl = overrides.redisUrl ?? process.env.REDIS_URL ?? 'redis://localhost:6380';
+  const simulatorBaseUrl =
+    overrides.simulatorBaseUrl ??
+    process.env.SIMULATOR_BASE_URL ??
+    'http://localhost:3102';
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   const jobStreamKey = overrides.jobStreamKey ?? process.env.JOB_STREAM_KEY ?? 'reloop:jobs:ready';
   const jobConsumerGroup = overrides.jobConsumerGroup ?? process.env.JOB_CONSUMER_GROUP ?? 'recovery-workers';
@@ -128,6 +133,7 @@ export function loadWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerC
 
   return {
     redisUrl,
+    simulatorBaseUrl,
     databaseUrl,
     jobStreamKey,
     jobConsumerGroup,

@@ -8,6 +8,7 @@ export * from './workflow-coordinator';
 export * from './workflow-creator';
 export * from './recovery-router-scanner';
 export * from './reconciliation-scanner';
+export * from './simulator-snapshot-provider';
 export * from './runtime';
 
 async function bootstrap() {

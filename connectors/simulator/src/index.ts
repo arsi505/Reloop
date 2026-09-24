@@ -95,6 +95,7 @@ export type FaultType =
   | 'DUPLICATE_ORDER'
   | 'INVENTORY_MISMATCH'
   | 'COMMIT_THEN_TIMEOUT'
+  | 'SUCCESS_WITHOUT_COMMIT'
   | 'SUCCESS';
 
 export interface FaultRule {

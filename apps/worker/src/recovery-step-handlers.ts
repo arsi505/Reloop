@@ -4,7 +4,6 @@ import { JobExecutionError } from './errors';
 import { WorkflowStepContext } from './workflow-step-registry';
 import {
   RecoveryActionExecutor,
-  SimulatorRecoveryActionAdapter,
 } from '@reloop/connector-simulator';
 
 export interface RecoveryStepHandlerDependencies {
@@ -62,9 +61,9 @@ function requireCaseId(payload: Record<string, unknown>, handlerKey: string): st
  */
 export function registerRecoveryStepHandlers(
   registry: { register: (handlerKey: string, handler: any) => void },
-  deps?: Partial<RecoveryStepHandlerDependencies>,
+  deps: RecoveryStepHandlerDependencies,
 ): void {
-  const actionExecutor = deps?.actionExecutor ?? new SimulatorRecoveryActionAdapter();
+  const actionExecutor = deps.actionExecutor;
 
   // =========================================================================
   // 1. MISSING SHOPIFY TRACKING HANDLERS
@@ -295,7 +294,7 @@ export function registerRecoveryStepHandlers(
     };
 
     // Invoke optional CaseResolution callback if provided for backward compatibility
-    if (deps?.resolveCaseCallback && recoveryCaseId) {
+    if (deps.resolveCaseCallback && recoveryCaseId) {
       await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,
@@ -413,7 +412,7 @@ export function registerRecoveryStepHandlers(
     };
 
     // Invoke optional CaseResolution callback if provided for backward compatibility
-    if (deps?.resolveCaseCallback && recoveryCaseId) {
+    if (deps.resolveCaseCallback && recoveryCaseId) {
       await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,
@@ -545,7 +544,7 @@ export function registerRecoveryStepHandlers(
     };
 
     // Invoke optional CaseResolution callback if provided for backward compatibility
-    if (deps?.resolveCaseCallback && recoveryCaseId) {
+    if (deps.resolveCaseCallback && recoveryCaseId) {
       await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,

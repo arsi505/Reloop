@@ -13,7 +13,10 @@ import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
 import { WorkflowStepExecutor } from './workflow-step-executor';
 import { ShopifySyncJobExecutor } from './shopify-sync-executor';
 import { ShipStationSyncJobExecutor } from './shipstation-sync-executor';
-import { SimulatorRecoveryActionAdapter } from '@reloop/connector-simulator';
+import {
+  RecoveryActionExecutor,
+  SimulatorRecoveryActionAdapter,
+} from '@reloop/connector-simulator';
 import { registerRecoveryStepHandlers } from './recovery-step-handlers';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,7 +54,7 @@ export class WorkerService {
       retryPolicy?: RetryPolicy;
       shopifySyncExecutor?: ShopifySyncJobExecutor;
       shipstationSyncExecutor?: ShipStationSyncJobExecutor;
-      actionExecutor?: any;
+      actionExecutor?: RecoveryActionExecutor;
       fetchFn?: typeof fetch;
     } = {},
   ) {
@@ -61,7 +64,9 @@ export class WorkerService {
     this.stepHandlerRegistry = options.stepHandlerRegistry ?? new WorkflowStepHandlerRegistry();
 
     if (!this.stepHandlerRegistry.has('RECOVERY_CHECK_TRACKING')) {
-      const actionExecutor = options.actionExecutor ?? new SimulatorRecoveryActionAdapter();
+      const actionExecutor =
+        options.actionExecutor ??
+        new SimulatorRecoveryActionAdapter(config.simulatorBaseUrl);
       registerRecoveryStepHandlers(this.stepHandlerRegistry, { actionExecutor });
     }
 
