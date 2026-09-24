@@ -188,14 +188,10 @@ export class WebhooksService {
         existingEvent.status === IntegrationEventStatus.RECEIVED ||
         existingEvent.status === IntegrationEventStatus.PROCESSING
       ) {
-        setImmediate(() => {
-          this.processor.processEvent(existingEvent.id).catch((err) => {
-            this.logger.error(
-              `Failed to process stranded duplicate event ${existingEvent.id}: ${err.message}`,
-              err.stack,
-            );
-          });
-        });
+        this.processor.scheduleEventProcessing(
+          existingEvent.id,
+          'stranded duplicate event',
+        );
       }
 
       return {
@@ -324,11 +320,7 @@ export class WebhooksService {
       );
 
       // Trigger background processing asynchronously
-      setImmediate(() => {
-        this.processor.processEvent(createdEvent.id).catch((err) => {
-          this.logger.error(`Failed to process event ${createdEvent.id}: ${err.message}`, err.stack);
-        });
-      });
+      this.processor.scheduleEventProcessing(createdEvent.id);
 
       return {
         status: 'accepted',
@@ -357,14 +349,10 @@ export class WebhooksService {
           (existingRaceEvent.status === IntegrationEventStatus.RECEIVED ||
             existingRaceEvent.status === IntegrationEventStatus.PROCESSING)
         ) {
-          setImmediate(() => {
-            this.processor.processEvent(existingRaceEvent.id).catch((err2) => {
-              this.logger.error(
-                `Failed to process stranded race event ${existingRaceEvent.id}: ${err2.message}`,
-                err2.stack,
-              );
-            });
-          });
+          this.processor.scheduleEventProcessing(
+            existingRaceEvent.id,
+            'stranded race event',
+          );
         }
 
         return {

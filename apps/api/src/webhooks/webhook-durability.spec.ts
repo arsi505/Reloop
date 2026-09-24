@@ -390,9 +390,29 @@ describe('E-02: Durable Webhook Processing & Recovery Specification', () => {
       testProcessor.start();
       expect(testProcessor.getIsRunning()).toBe(true);
 
+      const queuedEvent = await prisma.integrationEvent.create({
+        data: {
+          organizationId: orgId,
+          integrationId,
+          providerEventId: `evt_shutdown_${Date.now()}`,
+          eventType: 'ORDER_CREATED',
+          payload: { orderNumber: `ORD-SHUTDOWN-${Date.now()}`, status: 'PAID' },
+          status: IntegrationEventStatus.RECEIVED,
+        },
+      });
+      testProcessor.scheduleEventProcessing(queuedEvent.id);
+
       // Stop loop gracefully
       await testProcessor.stop();
       expect(testProcessor.getIsRunning()).toBe(false);
+
+      // Advance one event-loop turn: a leaked setImmediate would process the row.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const eventAfterStop = await prisma.integrationEvent.findUniqueOrThrow({
+        where: { id: queuedEvent.id },
+      });
+      expect(eventAfterStop.status).toBe(IntegrationEventStatus.RECEIVED);
+      await prisma.integrationEvent.delete({ where: { id: queuedEvent.id } });
     });
   });
 });

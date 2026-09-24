@@ -28,7 +28,9 @@ export class WebhookEventProcessorService
   private readonly adapterRegistry: WebhookAdapterRegistry;
 
   private timer: NodeJS.Timeout | null = null;
+  private readonly pendingDispatches = new Set<NodeJS.Immediate>();
   private running = false;
+  private acceptingBackgroundWork = true;
   private isTicking = false;
   private intervalMs = 2000;
   private staleThresholdMs = 60000;
@@ -69,6 +71,7 @@ export class WebhookEventProcessorService
 
   start(): void {
     if (this.running) return;
+    this.acceptingBackgroundWork = true;
     this.running = true;
     this.logger.log(
       `[Reloop WebhookProcessor] Started durable recovery scanner (interval: ${this.intervalMs}ms, staleThreshold: ${this.staleThresholdMs}ms, batchSize: ${this.batchSize})`,
@@ -88,14 +91,48 @@ export class WebhookEventProcessorService
 
   async stop(): Promise<void> {
     this.running = false;
+    this.acceptingBackgroundWork = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+
+    for (const dispatch of this.pendingDispatches) {
+      clearImmediate(dispatch);
+    }
+    this.pendingDispatches.clear();
+
+    if (this.inFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight.values()]);
     }
     while (this.isTicking) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     this.logger.log('[Reloop WebhookProcessor] Stopped durable recovery scanner.');
+  }
+
+  /**
+   * Queues best-effort processing while retaining lifecycle ownership of the
+   * scheduled callback. Shutdown cancels callbacks that have not started and
+   * waits for callbacks that have already entered processEvent().
+   */
+  scheduleEventProcessing(eventId: string, description = 'event'): void {
+    if (!this.acceptingBackgroundWork) return;
+
+    const dispatch = setImmediate(() => {
+      this.pendingDispatches.delete(dispatch);
+      if (!this.acceptingBackgroundWork) return;
+
+      void this.processEvent(eventId).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : undefined;
+        this.logger.error(
+          `Failed to process ${description} ${eventId}: ${message}`,
+          stack,
+        );
+      });
+    });
+    this.pendingDispatches.add(dispatch);
   }
 
   getIsRunning(): boolean {
