@@ -29,6 +29,8 @@ const testDatabaseUrl =
   process.env.TEST_DATABASE_URL ||
   'postgresql://reloop_app:change_me@localhost:5433/reloop_test?schema=public';
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6380';
+const DURABLE_STATE_WAIT_TIMEOUT_MS = 20_000;
+const PRODUCTION_COMPOSITION_TEST_TIMEOUT_MS = DURABLE_STATE_WAIT_TIMEOUT_MS + 5_000;
 
 interface TestContext {
   organizationId: string;
@@ -203,24 +205,26 @@ describe('N-01 production recovery composition', () => {
     await context.worker!.start();
     await context.scheduler!.start();
 
-    const recoveryCase = await waitFor(async () =>
-      prisma.recoveryCase.findFirst({
+    const outcome = await waitFor(async () => {
+      const recoveryCase = await prisma.recoveryCase.findFirst({
         where: {
           organizationId: context!.organizationId,
           type: RecoveryCaseType.TRACKING_MISSING_IN_SHOPIFY,
         },
-      }),
-    );
+      });
+      if (!recoveryCase) return null;
 
-    const verifyStep = await waitFor(async () => {
       const step = await prisma.workflowStep.findFirst({
         where: {
           workflow: { recoveryCaseId: recoveryCase.id },
           key: 'VERIFY',
         },
       });
-      return step?.status === WorkflowStepStatus.FAILED ? step : null;
-    });
+      return step?.status === WorkflowStepStatus.FAILED
+        ? { recoveryCase, verifyStep: step }
+        : null;
+    }, DURABLE_STATE_WAIT_TIMEOUT_MS);
+    const { recoveryCase, verifyStep } = outcome;
     expect(verifyStep.status).toBe(WorkflowStepStatus.FAILED);
 
     const executeStep = await prisma.workflowStep.findFirstOrThrow({
@@ -241,7 +245,7 @@ describe('N-01 production recovery composition', () => {
       `/shopify/orders/${encodeURIComponent(context.orderNumber)}`,
     );
     expect(shopifyOrder.trackingNumber).toBeUndefined();
-  });
+  }, PRODUCTION_COMPOSITION_TEST_TIMEOUT_MS);
 
   async function createContext(suffix: string): Promise<TestContext> {
     const runId = `${suffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -368,7 +372,7 @@ describe('N-01 production recovery composition', () => {
 
   async function waitFor<T>(
     operation: () => Promise<T | null | undefined>,
-    timeoutMs = 20_000,
+    timeoutMs = DURABLE_STATE_WAIT_TIMEOUT_MS,
   ): Promise<T> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
