@@ -17,6 +17,7 @@ describe('ShopifyOAuthService', () => {
 
   beforeEach(async () => {
     prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ configuration: {} }]),
       integration: {
         findUnique: jest.fn(),
         create: jest.fn(),
@@ -35,6 +36,7 @@ describe('ShopifyOAuthService', () => {
         create: jest.fn().mockResolvedValue({ id: 'job-123' }),
       },
     };
+    prisma.$transaction = jest.fn(async (callback: any) => callback(prisma));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [

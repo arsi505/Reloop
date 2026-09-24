@@ -1,9 +1,10 @@
-import { PrismaClient, JobErrorCategory } from '@prisma/client';
+import { Prisma, PrismaClient, JobErrorCategory } from '@prisma/client';
 import {
   ShipStationClient,
   normalizeShipStationShipment,
   normalizeShipStationLabel,
   NormalizedShipStationLabel,
+  NormalizedShipStationShipment,
   decryptCredentials,
   ShipStationRateLimitError,
   ShipStationServerError,
@@ -15,11 +16,9 @@ import { EncryptedCredentialEnvelope, StoredShipStationCredential } from '@reloo
 import { JobContext } from './executor';
 import { JobExecutionError } from './errors';
 import {
-  asSyncConfiguration,
   establishSyncRun,
   failCurrentSyncRun,
-  isCurrentSyncRun,
-  updateCurrentSyncRun,
+  withCurrentSyncRunTransaction,
 } from './sync-run-state';
 
 export interface ShipStationSyncExecutorOptions {
@@ -266,7 +265,8 @@ export class ShipStationSyncJobExecutor {
           break;
         }
 
-        // Idempotently project shipments, labels, and tracking references
+        // Fetch and normalize provider state before opening the projection transaction.
+        // PostgreSQL then serializes each shipment projection against run activation.
         for (const rawShipment of pageRes.shipments) {
           const normalized = normalizeShipStationShipment(rawShipment);
 
@@ -277,78 +277,6 @@ export class ShipStationSyncJobExecutor {
             }
           }
 
-          // Find or create ExternalOrder representation
-          let externalOrder = await this.prisma.externalOrder.findUnique({
-            where: {
-              organizationId_externalOrderNumber: {
-                organizationId: integration.organizationId,
-                externalOrderNumber: normalized.orderNumber,
-              },
-            },
-          });
-
-          // CRITICAL SEMANTIC INVARIANT:
-          // 'label_purchased' is mapped to 'LABEL_CREATED', NOT 'SHIPPED'.
-          // ExternalOrder status is set to 'FULFILLING', never prematurely 'SHIPPED'.
-          const targetOrderStatus =
-            normalized.status === 'CANCELLED'
-              ? 'CANCELLED'
-              : normalized.status === 'LABEL_CREATED'
-                ? 'FULFILLING'
-                : 'READY_FOR_FULFILLMENT';
-
-          if (!externalOrder) {
-            externalOrder = await this.prisma.externalOrder.create({
-              data: {
-                organizationId: integration.organizationId,
-                primaryIntegrationId: integration.id,
-                externalOrderNumber: normalized.orderNumber,
-                status: targetOrderStatus,
-                sourceCreatedAt: normalized.createdAt,
-                lastObservedAt: normalized.updatedAt || new Date(),
-              },
-            });
-          } else {
-            // Out-of-order fence: only update order status if incoming modified_at is >= existing lastObservedAt
-            const isNewer =
-              !externalOrder.lastObservedAt || normalized.updatedAt >= externalOrder.lastObservedAt;
-
-            await this.prisma.externalOrder.update({
-              where: { id: externalOrder.id },
-              data: {
-                ...(isNewer ? { status: targetOrderStatus } : {}),
-                lastObservedAt: isNewer ? normalized.updatedAt : externalOrder.lastObservedAt,
-              },
-            });
-          }
-
-          // Project Shipment ExternalReference
-          await this.prisma.externalReference.upsert({
-            where: {
-              organizationId_integrationId_resourceType_externalId: {
-                organizationId: integration.organizationId,
-                integrationId: integration.id,
-                resourceType: 'SHIPMENT',
-                externalId: normalized.shipmentId,
-              },
-            },
-            update: {
-              externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
-              updatedAt: new Date(),
-            },
-            create: {
-              organizationId: integration.organizationId,
-              integrationId: integration.id,
-              externalOrderId: externalOrder.id,
-              resourceType: 'SHIPMENT',
-              externalId: normalized.shipmentId,
-              externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
-            },
-          });
-
-          // CRITICAL V2 SEMANTICS:
-          // Tracking truth originates on Label resources, not inferred from shipment.
-          // Authoritative join: label.shipment_id === shipment.shipment_id
           const sid = String(normalized.shipmentId);
           let labelsList: NormalizedShipStationLabel[] = [];
 
@@ -372,72 +300,32 @@ export class ShipStationSyncJobExecutor {
             }
           }
 
-          // Project LABEL ExternalReferences
-          for (const label of labelsList) {
-            const labelPayload = JSON.stringify({
-              trackingNumber: label.trackingNumber,
-              voided: label.voided,
-              carrierCode: label.carrierCode,
-              serviceCode: label.serviceCode,
-              status: label.status,
-              trackingStatus: label.trackingStatus,
-            });
-
-            await this.prisma.externalReference.upsert({
-              where: {
-                organizationId_integrationId_resourceType_externalId: {
-                  organizationId: integration.organizationId,
-                  integrationId: integration.id,
-                  resourceType: 'LABEL',
-                  externalId: label.labelId,
-                },
-              },
-              update: {
-                externalReference: labelPayload,
-                updatedAt: new Date(),
-              },
-              create: {
-                organizationId: integration.organizationId,
-                integrationId: integration.id,
-                externalOrderId: externalOrder.id,
-                resourceType: 'LABEL',
-                externalId: label.labelId,
-                externalReference: labelPayload,
-              },
-            });
-          }
-
-          // Authoritative Tracking ExternalReference projection:
-          // ONLY active, non-voided labels with valid tracking numbers provide tracking truth!
-          const activeLabels = labelsList.filter(
-            (l) => !l.voided && Boolean(l.trackingNumber && l.trackingNumber.trim()),
+          const projection = await withCurrentSyncRunTransaction(
+            this.prisma,
+            integrationId,
+            syncRunId,
+            async (tx) => {
+              await this.projectShipment(
+                tx,
+                integration.organizationId,
+                integration.id,
+                normalized,
+                labelsList,
+              );
+            },
           );
-
-          for (const activeLabel of activeLabels) {
-            await this.prisma.externalReference.upsert({
-              where: {
-                organizationId_integrationId_resourceType_externalId: {
-                  organizationId: integration.organizationId,
-                  integrationId: integration.id,
-                  resourceType: 'TRACKING',
-                  externalId: activeLabel.trackingNumber,
-                },
-              },
-              update: {
-                externalReference: activeLabel.carrierCode || null,
-                updatedAt: new Date(),
-              },
-              create: {
-                organizationId: integration.organizationId,
-                integrationId: integration.id,
-                externalOrderId: externalOrder.id,
-                resourceType: 'TRACKING',
-                externalId: activeLabel.trackingNumber,
-                externalReference: activeLabel.carrierCode || null,
-              },
-            });
+          if (!projection.current) {
+            return {
+              integrationId: integration.id,
+              totalShipmentsSynced: totalSynced,
+              pagesProcessed,
+              complete: false,
+              nextPage: currentPage,
+              continuationJobId: null,
+              syncRunId,
+              currentRun: false,
+            };
           }
-
           totalSynced++;
         }
 
@@ -518,20 +406,6 @@ export class ShipStationSyncJobExecutor {
     // Reaching maxShipments cap represents bounded work completion, NOT provider sync completion.
     const complete = !hasMorePages;
 
-    if (!(await isCurrentSyncRun(this.prisma, integrationId, syncRunId))) {
-      return {
-        integrationId: integration.id,
-        totalShipmentsSynced: totalSynced,
-        pagesProcessed,
-        complete: false,
-        nextPage: currentPage,
-        continuationJobId: null,
-        syncRunId,
-        currentRun: false,
-      };
-    }
-
-    let continuationJobId: string | null = null;
     if (hasMorePages) {
       if (currentPage <= (typeof payload.page === 'number' ? payload.page : 0)) {
         await failCurrentSyncRun(
@@ -547,67 +421,225 @@ export class ShipStationSyncJobExecutor {
           retryable: false,
         });
       }
-      const continuationIdempotencyKey = `shipstation_sync_continuation_${integration.id}_${syncRunId}_page_${currentPage}`;
-      const continuationJob = await this.prisma.job.upsert({
-        where: {
-          organizationId_idempotencyKey: {
-            organizationId: integration.organizationId,
-            idempotencyKey: continuationIdempotencyKey,
-          },
-        },
-        update: {
-          updatedAt: new Date(),
-        },
-        create: {
-          organizationId: integration.organizationId,
-          type: 'SHIPSTATION_SYNC_SHIPMENTS',
-          status: 'QUEUED',
-          priority: 50,
-          payload: {
-            integrationId: integration.id,
-            syncRunId,
-            page: currentPage,
-            maxShipments,
-            modifiedAtStart,
-            modifiedAtEnd,
-            parentJobId: context.jobId,
-          },
-          idempotencyKey: continuationIdempotencyKey,
-          nextRunAt: new Date(),
-        },
-        select: { id: true },
-      });
-      continuationJobId = continuationJob.id;
     }
 
-    // 8. Update Integration configuration with completed sync & advance watermark ONLY ON SUCCESS
     const newWatermark = latestModifiedAtObserved
       ? latestModifiedAtObserved.toISOString()
       : modifiedAtEnd;
 
-    const latestConfig = asSyncConfiguration(currentConfig) as Record<string, any>;
-    const currentRun = await updateCurrentSyncRun(this.prisma, integrationId, syncRunId, {
-      initialSyncStatus: complete ? 'COMPLETED' : 'SYNCING',
-      lastSyncAt: new Date().toISOString(),
-      lastSyncShipmentsCount:
-        (!payload.page || payload.page === 1)
-          ? totalSynced
-          : (latestConfig.lastSyncShipmentsCount || 0) + totalSynced,
-      continuationPage: complete ? null : currentPage,
-      lastSuccessfulSyncWatermark: newWatermark,
-    });
+    const finalization = await withCurrentSyncRunTransaction(
+      this.prisma,
+      integrationId,
+      syncRunId,
+      async (tx, latestConfig) => {
+        let continuationJobId: string | null = null;
+        if (hasMorePages) {
+          const continuationIdempotencyKey = `shipstation_sync_continuation_${integration.id}_${syncRunId}_page_${currentPage}`;
+          const continuationJob = await tx.job.upsert({
+            where: {
+              organizationId_idempotencyKey: {
+                organizationId: integration.organizationId,
+                idempotencyKey: continuationIdempotencyKey,
+              },
+            },
+            update: { updatedAt: new Date() },
+            create: {
+              organizationId: integration.organizationId,
+              type: 'SHIPSTATION_SYNC_SHIPMENTS',
+              status: 'QUEUED',
+              priority: 50,
+              payload: {
+                integrationId: integration.id,
+                syncRunId,
+                page: currentPage,
+                maxShipments,
+                modifiedAtStart,
+                modifiedAtEnd,
+                parentJobId: context.jobId,
+              },
+              idempotencyKey: continuationIdempotencyKey,
+              nextRunAt: new Date(),
+            },
+            select: { id: true },
+          });
+          continuationJobId = continuationJob.id;
+        }
+
+        await tx.integration.update({
+          where: { id: integrationId },
+          data: {
+            configuration: {
+              ...latestConfig,
+              activeSyncRunId: syncRunId,
+              initialSyncStatus: complete ? 'COMPLETED' : 'SYNCING',
+              lastSyncAt: new Date().toISOString(),
+              lastSyncShipmentsCount:
+                !payload.page || payload.page === 1
+                  ? totalSynced
+                  : Number(latestConfig.lastSyncShipmentsCount || 0) + totalSynced,
+              continuationPage: complete ? null : currentPage,
+              lastSuccessfulSyncWatermark: newWatermark,
+            },
+          },
+        });
+        return continuationJobId;
+      },
+    );
+
+    if (!finalization.current) {
+      return {
+        integrationId: integration.id,
+        totalShipmentsSynced: totalSynced,
+        pagesProcessed,
+        complete: false,
+        nextPage: currentPage,
+        continuationJobId: null,
+        syncRunId,
+        currentRun: false,
+      };
+    }
+    const continuationJobId = finalization.result || null;
 
     // 9. Return safe result metadata (ZERO secrets)
     return {
       integrationId: integration.id,
       totalShipmentsSynced: totalSynced,
       pagesProcessed,
-      complete: complete && currentRun,
+      complete,
       nextPage: complete ? undefined : currentPage,
-      continuationJobId: currentRun ? continuationJobId : null,
+      continuationJobId,
       watermarkAdvancedTo: newWatermark,
       syncRunId,
-      currentRun,
+      currentRun: true,
     };
+  }
+
+  private async projectShipment(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    integrationId: string,
+    normalized: NormalizedShipStationShipment,
+    labels: NormalizedShipStationLabel[],
+  ): Promise<void> {
+    let externalOrder = await tx.externalOrder.findUnique({
+      where: {
+        organizationId_externalOrderNumber: {
+          organizationId,
+          externalOrderNumber: normalized.orderNumber,
+        },
+      },
+    });
+
+    const targetOrderStatus =
+      normalized.status === 'CANCELLED'
+        ? 'CANCELLED'
+        : normalized.status === 'LABEL_CREATED'
+          ? 'FULFILLING'
+          : 'READY_FOR_FULFILLMENT';
+
+    if (!externalOrder) {
+      externalOrder = await tx.externalOrder.create({
+        data: {
+          organizationId,
+          primaryIntegrationId: integrationId,
+          externalOrderNumber: normalized.orderNumber,
+          status: targetOrderStatus,
+          sourceCreatedAt: normalized.createdAt,
+          lastObservedAt: normalized.updatedAt || new Date(),
+        },
+      });
+    } else {
+      const isNewer =
+        !externalOrder.lastObservedAt || normalized.updatedAt >= externalOrder.lastObservedAt;
+      await tx.externalOrder.update({
+        where: { id: externalOrder.id },
+        data: {
+          ...(isNewer ? { status: targetOrderStatus } : {}),
+          lastObservedAt: isNewer ? normalized.updatedAt : externalOrder.lastObservedAt,
+        },
+      });
+    }
+
+    await tx.externalReference.upsert({
+      where: {
+        organizationId_integrationId_resourceType_externalId: {
+          organizationId,
+          integrationId,
+          resourceType: 'SHIPMENT',
+          externalId: normalized.shipmentId,
+        },
+      },
+      update: {
+        externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
+        updatedAt: new Date(),
+      },
+      create: {
+        organizationId,
+        integrationId,
+        externalOrderId: externalOrder.id,
+        resourceType: 'SHIPMENT',
+        externalId: normalized.shipmentId,
+        externalReference: normalized.shipmentNumber || normalized.externalShipmentId || null,
+      },
+    });
+
+    for (const label of labels) {
+      const labelPayload = JSON.stringify({
+        trackingNumber: label.trackingNumber,
+        voided: label.voided,
+        carrierCode: label.carrierCode,
+        serviceCode: label.serviceCode,
+        status: label.status,
+        trackingStatus: label.trackingStatus,
+      });
+      await tx.externalReference.upsert({
+        where: {
+          organizationId_integrationId_resourceType_externalId: {
+            organizationId,
+            integrationId,
+            resourceType: 'LABEL',
+            externalId: label.labelId,
+          },
+        },
+        update: { externalReference: labelPayload, updatedAt: new Date() },
+        create: {
+          organizationId,
+          integrationId,
+          externalOrderId: externalOrder.id,
+          resourceType: 'LABEL',
+          externalId: label.labelId,
+          externalReference: labelPayload,
+        },
+      });
+    }
+
+    const activeLabels = labels.filter(
+      (label) =>
+        !label.voided && Boolean(label.trackingNumber && label.trackingNumber.trim()),
+    );
+    for (const activeLabel of activeLabels) {
+      await tx.externalReference.upsert({
+        where: {
+          organizationId_integrationId_resourceType_externalId: {
+            organizationId,
+            integrationId,
+            resourceType: 'TRACKING',
+            externalId: activeLabel.trackingNumber,
+          },
+        },
+        update: {
+          externalReference: activeLabel.carrierCode || null,
+          updatedAt: new Date(),
+        },
+        create: {
+          organizationId,
+          integrationId,
+          externalOrderId: externalOrder.id,
+          resourceType: 'TRACKING',
+          externalId: activeLabel.trackingNumber,
+          externalReference: activeLabel.carrierCode || null,
+        },
+      });
+    }
   }
 }

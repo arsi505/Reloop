@@ -11,11 +11,9 @@ import { EncryptedCredentialEnvelope, StoredShopifyCredential } from '@reloop/in
 import { JobContext } from './executor';
 import { JobExecutionError } from './errors';
 import {
-  asSyncConfiguration,
   establishSyncRun,
   failCurrentSyncRun,
-  isCurrentSyncRun,
-  updateCurrentSyncRun,
+  withCurrentSyncRunTransaction,
 } from './sync-run-state';
 
 export interface ShopifySyncExecutorOptions {
@@ -368,90 +366,107 @@ export class ShopifySyncJobExecutor {
           break;
         }
 
-        // Idempotently project orders and fulfillments
-        for (const rawOrder of page.orders) {
-          const normalized = normalizeShopifyOrder(rawOrder);
+        const normalizedOrders = page.orders.map((rawOrder) =>
+          normalizeShopifyOrder(rawOrder),
+        );
+        const projection = await withCurrentSyncRunTransaction(
+          this.prisma,
+          integrationId,
+          syncRunId,
+          async (tx) => {
+            for (const normalized of normalizedOrders) {
+              const externalOrder = await tx.externalOrder.upsert({
+                where: {
+                  organizationId_externalOrderNumber: {
+                    organizationId: integration.organizationId,
+                    externalOrderNumber: normalized.orderNumber,
+                  },
+                },
+                update: {
+                  status: normalized.status,
+                  currency: normalized.currency,
+                  totalAmount: normalized.totalAmount,
+                  sourceCreatedAt: normalized.sourceCreatedAt,
+                  lastObservedAt: new Date(),
+                  primaryIntegrationId: integration.id,
+                },
+                create: {
+                  organizationId: integration.organizationId,
+                  primaryIntegrationId: integration.id,
+                  externalOrderNumber: normalized.orderNumber,
+                  status: normalized.status,
+                  currency: normalized.currency,
+                  totalAmount: normalized.totalAmount,
+                  sourceCreatedAt: normalized.sourceCreatedAt,
+                  lastObservedAt: new Date(),
+                },
+              });
 
-          // Project ExternalOrder
-          const externalOrder = await this.prisma.externalOrder.upsert({
-            where: {
-              organizationId_externalOrderNumber: {
-                organizationId: integration.organizationId,
-                externalOrderNumber: normalized.orderNumber,
-              },
-            },
-            update: {
-              status: normalized.status,
-              currency: normalized.currency,
-              totalAmount: normalized.totalAmount,
-              sourceCreatedAt: normalized.sourceCreatedAt,
-              lastObservedAt: new Date(),
-              primaryIntegrationId: integration.id,
-            },
-            create: {
-              organizationId: integration.organizationId,
-              primaryIntegrationId: integration.id,
-              externalOrderNumber: normalized.orderNumber,
-              status: normalized.status,
-              currency: normalized.currency,
-              totalAmount: normalized.totalAmount,
-              sourceCreatedAt: normalized.sourceCreatedAt,
-              lastObservedAt: new Date(),
-            },
-          });
-
-          // Project Order ExternalReference
-          await this.prisma.externalReference.upsert({
-            where: {
-              organizationId_integrationId_resourceType_externalId: {
-                organizationId: integration.organizationId,
-                integrationId: integration.id,
-                resourceType: 'ORDER',
-                externalId: normalized.externalOrderId,
-              },
-            },
-            update: {
-              externalReference: normalized.orderNumber,
-              updatedAt: new Date(),
-            },
-            create: {
-              organizationId: integration.organizationId,
-              integrationId: integration.id,
-              externalOrderId: externalOrder.id,
-              resourceType: 'ORDER',
-              externalId: normalized.externalOrderId,
-              externalReference: normalized.orderNumber,
-            },
-          });
-
-          // Project Fulfillment ExternalReferences
-          for (const fulfillment of normalized.fulfillments) {
-            await this.prisma.externalReference.upsert({
-              where: {
-                organizationId_integrationId_resourceType_externalId: {
+              await tx.externalReference.upsert({
+                where: {
+                  organizationId_integrationId_resourceType_externalId: {
+                    organizationId: integration.organizationId,
+                    integrationId: integration.id,
+                    resourceType: 'ORDER',
+                    externalId: normalized.externalOrderId,
+                  },
+                },
+                update: {
+                  externalReference: normalized.orderNumber,
+                  updatedAt: new Date(),
+                },
+                create: {
                   organizationId: integration.organizationId,
                   integrationId: integration.id,
-                  resourceType: 'FULFILLMENT',
-                  externalId: fulfillment.fulfillmentId,
+                  externalOrderId: externalOrder.id,
+                  resourceType: 'ORDER',
+                  externalId: normalized.externalOrderId,
+                  externalReference: normalized.orderNumber,
                 },
-              },
-              update: {
-                externalReference: fulfillment.trackingNumber || null,
-                updatedAt: new Date(),
-              },
-              create: {
-                organizationId: integration.organizationId,
-                integrationId: integration.id,
-                externalOrderId: externalOrder.id,
-                resourceType: 'FULFILLMENT',
-                externalId: fulfillment.fulfillmentId,
-                externalReference: fulfillment.trackingNumber || null,
-              },
-            });
-          }
+              });
 
-          totalSynced++;
+              for (const fulfillment of normalized.fulfillments) {
+                await tx.externalReference.upsert({
+                  where: {
+                    organizationId_integrationId_resourceType_externalId: {
+                      organizationId: integration.organizationId,
+                      integrationId: integration.id,
+                      resourceType: 'FULFILLMENT',
+                      externalId: fulfillment.fulfillmentId,
+                    },
+                  },
+                  update: {
+                    externalReference: fulfillment.trackingNumber || null,
+                    updatedAt: new Date(),
+                  },
+                  create: {
+                    organizationId: integration.organizationId,
+                    integrationId: integration.id,
+                    externalOrderId: externalOrder.id,
+                    resourceType: 'FULFILLMENT',
+                    externalId: fulfillment.fulfillmentId,
+                    externalReference: fulfillment.trackingNumber || null,
+                  },
+                });
+              }
+            }
+            return normalizedOrders.length;
+          },
+        );
+        if (!projection.current) {
+          return {
+            integrationId: integration.id,
+            shopDomain,
+            totalOrdersSynced: totalSynced,
+            pagesProcessed,
+            complete: false,
+            nextCursor: endCursor,
+            continuationJobId: null,
+            syncRunId,
+            currentRun: false,
+          };
         }
+        totalSynced += projection.result || 0;
 
         endCursor = nextCursor;
         hasNextPage = page.pageInfo.hasNextPage && !!endCursor;
@@ -496,7 +511,63 @@ export class ShopifySyncJobExecutor {
     const isExhausted = !hasNextPage;
     const complete = isExhausted;
 
-    if (!(await isCurrentSyncRun(this.prisma, integrationId, syncRunId))) {
+    const finalization = await withCurrentSyncRunTransaction(
+      this.prisma,
+      integrationId,
+      syncRunId,
+      async (tx, currentConfig) => {
+        let continuationJobId: string | null = null;
+        if (!isExhausted && endCursor) {
+          const continuationIdempotencyKey = `shopify_sync_continuation_${integration.id}_${syncRunId}_${endCursor}`;
+          const continuationJob = await tx.job.upsert({
+            where: {
+              organizationId_idempotencyKey: {
+                organizationId: integration.organizationId,
+                idempotencyKey: continuationIdempotencyKey,
+              },
+            },
+            update: { updatedAt: new Date() },
+            create: {
+              organizationId: integration.organizationId,
+              type: 'SHOPIFY_SYNC_ORDERS',
+              status: 'QUEUED',
+              priority: 50,
+              payload: {
+                integrationId: integration.id,
+                shopDomain,
+                syncRunId,
+                maxOrders,
+                cursor: endCursor,
+                parentJobId: context.jobId,
+              },
+              idempotencyKey: continuationIdempotencyKey,
+              nextRunAt: new Date(),
+            },
+            select: { id: true },
+          });
+          continuationJobId = continuationJob.id;
+        }
+
+        await tx.integration.update({
+          where: { id: integrationId },
+          data: {
+            configuration: {
+              ...currentConfig,
+              activeSyncRunId: syncRunId,
+              initialSyncStatus: isExhausted ? 'COMPLETED' : 'SYNCING',
+              lastSyncAt: new Date().toISOString(),
+              lastSyncOrdersCount: !payload.cursor
+                ? totalSynced
+                : Number(currentConfig.lastSyncOrdersCount || 0) + totalSynced,
+              continuationCursor: isExhausted ? null : endCursor,
+            },
+          },
+        });
+        return continuationJobId;
+      },
+    );
+
+    if (!finalization.current) {
       return {
         integrationId: integration.id,
         shopDomain,
@@ -509,53 +580,7 @@ export class ShopifySyncJobExecutor {
         currentRun: false,
       };
     }
-
-    let continuationJobId: string | null = null;
-    if (!isExhausted && endCursor) {
-      const continuationIdempotencyKey = `shopify_sync_continuation_${integration.id}_${syncRunId}_${endCursor}`;
-      const continuationJob = await this.prisma.job.upsert({
-        where: {
-          organizationId_idempotencyKey: {
-            organizationId: integration.organizationId,
-            idempotencyKey: continuationIdempotencyKey,
-          },
-        },
-        update: {
-          updatedAt: new Date(),
-        },
-        create: {
-          organizationId: integration.organizationId,
-          type: 'SHOPIFY_SYNC_ORDERS',
-          status: 'QUEUED',
-          priority: 50,
-          payload: {
-            integrationId: integration.id,
-            shopDomain,
-            syncRunId,
-            maxOrders,
-            cursor: endCursor,
-            parentJobId: context.jobId,
-          },
-          idempotencyKey: continuationIdempotencyKey,
-          nextRunAt: new Date(),
-        },
-        select: { id: true },
-      });
-      continuationJobId = continuationJob.id;
-    }
-
-    // 9. Update Integration configuration:
-    // Only mark initialSyncStatus = COMPLETED if provider is genuinely exhausted.
-    // If provider has more records, retain SYNCING and checkpoint continuationCursor.
-    const currentConfig = asSyncConfiguration(integration.configuration) as Record<string, any>;
-    const currentRun = await updateCurrentSyncRun(this.prisma, integrationId, syncRunId, {
-      initialSyncStatus: isExhausted ? 'COMPLETED' : 'SYNCING',
-      lastSyncAt: new Date().toISOString(),
-      lastSyncOrdersCount: !payload.cursor
-        ? totalSynced
-        : (currentConfig.lastSyncOrdersCount || 0) + totalSynced,
-      continuationCursor: isExhausted ? null : endCursor,
-    });
+    const continuationJobId = finalization.result || null;
 
     // 10. Return safe result metadata (ZERO plaintext tokens, secrets, or raw headers)
     return {
@@ -563,11 +588,11 @@ export class ShopifySyncJobExecutor {
       shopDomain,
       totalOrdersSynced: totalSynced,
       pagesProcessed,
-      complete: complete && currentRun,
+      complete,
       nextCursor: isExhausted ? undefined : endCursor,
-      continuationJobId: currentRun ? continuationJobId : null,
+      continuationJobId,
       syncRunId,
-      currentRun,
+      currentRun: true,
     };
   }
 }

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ShipStationClient,
@@ -20,6 +21,7 @@ import {
 } from '@reloop/connector-shipstation';
 import { StoredShipStationCredential } from '@reloop/integration-sdk';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
+import { activateSyncRunWithInitialJobInTransaction } from './sync-run-start';
 
 export interface ConnectShipStationResult {
   success: boolean;
@@ -85,81 +87,63 @@ export class ShipStationConnectionService {
 
     const encryptedEnvelope = encryptCredentials(credentialsToStore, this.encryptionKey);
 
-    // 3. Upsert Integration for organization and establish a durable sync-run identity
+    // 3-5. Serialize connection starts, persist the Integration/audit record, and
+    // atomically activate the run with its durable initial Job.
     const syncRunId = randomUUID();
-    const existing = await this.prisma.integration.findFirst({
-      where: {
-        organizationId,
-        provider: 'SHIPSTATION',
-      },
-    });
-
-    let integrationId: string;
-    if (existing) {
-      const updated = await this.prisma.integration.update({
-        where: { id: existing.id },
-        data: {
-          status: 'CONNECTED',
-          name: 'ShipStation',
-          mode: 'OBSERVE',
-          encryptedCredentials: encryptedEnvelope as unknown as object,
-          configuration: {
-            ...((existing.configuration as Record<string, unknown>) || {}),
-            connectedAt: new Date().toISOString(),
-            initialSyncStatus: 'SYNCING',
-            activeSyncRunId: syncRunId,
-          },
-        },
+    const integrationId = await this.prisma.$transaction(async (tx) => {
+      const lockKey = `reloop:shipstation-connect:${organizationId}`;
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`,
+      );
+      const existing = await tx.integration.findFirst({
+        where: { organizationId, provider: 'SHIPSTATION' },
       });
-      integrationId = updated.id;
-    } else {
-      const created = await this.prisma.integration.create({
+      const connectedAt = new Date().toISOString();
+      const integration = existing
+        ? await tx.integration.update({
+            where: { id: existing.id },
+            data: {
+              status: 'CONNECTED',
+              name: 'ShipStation',
+              mode: 'OBSERVE',
+              encryptedCredentials: encryptedEnvelope as unknown as object,
+              configuration: {
+                ...((existing.configuration as Record<string, unknown>) || {}),
+                connectedAt,
+              },
+            },
+          })
+        : await tx.integration.create({
+            data: {
+              organizationId,
+              provider: 'SHIPSTATION',
+              name: 'ShipStation',
+              status: 'CONNECTED',
+              mode: 'OBSERVE',
+              encryptedCredentials: encryptedEnvelope as unknown as object,
+              configuration: { connectedAt },
+            },
+          });
+
+      await activateSyncRunWithInitialJobInTransaction(tx, {
+        integrationId: integration.id,
+        organizationId,
+        syncRunId,
+        jobType: 'SHIPSTATION_SYNC_SHIPMENTS',
+        payload: { integrationId: integration.id, syncRunId },
+        idempotencyKey: `shipstation_sync_run_${integration.id}_${syncRunId}`,
+      });
+      await tx.auditLog.create({
         data: {
           organizationId,
-          provider: 'SHIPSTATION',
-          name: 'ShipStation',
-          status: 'CONNECTED',
-          mode: 'OBSERVE',
-          encryptedCredentials: encryptedEnvelope as unknown as object,
-          configuration: {
-            connectedAt: new Date().toISOString(),
-            initialSyncStatus: 'SYNCING',
-            activeSyncRunId: syncRunId,
-          },
+          actorUserId: userId,
+          entityType: 'INTEGRATION',
+          entityId: integration.id,
+          action: 'SHIPSTATION_INTEGRATION_CONNECTED',
+          metadata: { provider: 'SHIPSTATION', totalShipments },
         },
       });
-      integrationId = created.id;
-    }
-
-    // 4. Record Audit Log
-    await this.prisma.auditLog.create({
-      data: {
-        organizationId,
-        actorUserId: userId,
-        entityType: 'INTEGRATION',
-        entityId: integrationId,
-        action: 'SHIPSTATION_INTEGRATION_CONNECTED',
-        metadata: {
-          provider: 'SHIPSTATION',
-          totalShipments,
-        },
-      },
-    });
-
-    // 5. Enqueue Durable Initial Sync Job
-    await this.prisma.job.create({
-      data: {
-        id: syncRunId,
-        organizationId,
-        type: 'SHIPSTATION_SYNC_SHIPMENTS',
-        status: 'QUEUED',
-        payload: {
-          integrationId,
-          syncRunId,
-        },
-        idempotencyKey: `shipstation_sync_run_${integrationId}_${syncRunId}`,
-        nextRunAt: new Date(),
-      },
+      return integration.id;
     });
 
     // Safe invalidation event broadcast

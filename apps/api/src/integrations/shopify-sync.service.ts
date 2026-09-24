@@ -6,6 +6,10 @@ import {
   ShopifyClient,
   normalizeShopifyOrder,
 } from '@reloop/connector-shopify';
+import {
+  establishExistingSyncJobRun,
+  withSyncRunProjectionTransaction,
+} from './sync-run-start';
 
 export interface SyncResult {
   integrationId: string;
@@ -38,7 +42,12 @@ export class ShopifySyncService {
    */
   async syncRecentOrders(
     integrationId: string,
-    options?: { maxOrders?: number; fetchFn?: typeof fetch; cursor?: string },
+    options?: {
+      maxOrders?: number;
+      fetchFn?: typeof fetch;
+      cursor?: string;
+      syncRunId?: string;
+    },
   ): Promise<SyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -100,90 +109,97 @@ export class ShopifySyncService {
         break;
       }
 
-      // Idempotently project orders and fulfillments
-      for (const rawOrder of page.orders) {
-        const normalized = normalizeShopifyOrder(rawOrder);
+      const normalizedOrders = page.orders.map((rawOrder) =>
+        normalizeShopifyOrder(rawOrder),
+      );
+      const projection = await withSyncRunProjectionTransaction(
+        this.prisma,
+        integrationId,
+        options?.syncRunId,
+        async (tx) => {
+          for (const normalized of normalizedOrders) {
+            const externalOrder = await tx.externalOrder.upsert({
+              where: {
+                organizationId_externalOrderNumber: {
+                  organizationId: integration.organizationId,
+                  externalOrderNumber: normalized.orderNumber,
+                },
+              },
+              update: {
+                status: normalized.status,
+                currency: normalized.currency,
+                totalAmount: normalized.totalAmount,
+                sourceCreatedAt: normalized.sourceCreatedAt,
+                lastObservedAt: new Date(),
+                primaryIntegrationId: integration.id,
+              },
+              create: {
+                organizationId: integration.organizationId,
+                primaryIntegrationId: integration.id,
+                externalOrderNumber: normalized.orderNumber,
+                status: normalized.status,
+                currency: normalized.currency,
+                totalAmount: normalized.totalAmount,
+                sourceCreatedAt: normalized.sourceCreatedAt,
+                lastObservedAt: new Date(),
+              },
+            });
 
-        // Project ExternalOrder
-        const externalOrder = await this.prisma.externalOrder.upsert({
-          where: {
-            organizationId_externalOrderNumber: {
-              organizationId: integration.organizationId,
-              externalOrderNumber: normalized.orderNumber,
-            },
-          },
-          update: {
-            status: normalized.status,
-            currency: normalized.currency,
-            totalAmount: normalized.totalAmount,
-            sourceCreatedAt: normalized.sourceCreatedAt,
-            lastObservedAt: new Date(),
-            primaryIntegrationId: integration.id,
-          },
-          create: {
-            organizationId: integration.organizationId,
-            primaryIntegrationId: integration.id,
-            externalOrderNumber: normalized.orderNumber,
-            status: normalized.status,
-            currency: normalized.currency,
-            totalAmount: normalized.totalAmount,
-            sourceCreatedAt: normalized.sourceCreatedAt,
-            lastObservedAt: new Date(),
-          },
-        });
-
-        // Project Order ExternalReference
-        await this.prisma.externalReference.upsert({
-          where: {
-            organizationId_integrationId_resourceType_externalId: {
-              organizationId: integration.organizationId,
-              integrationId: integration.id,
-              resourceType: 'ORDER',
-              externalId: normalized.externalOrderId,
-            },
-          },
-          update: {
-            externalReference: normalized.orderNumber,
-            updatedAt: new Date(),
-          },
-          create: {
-            organizationId: integration.organizationId,
-            integrationId: integration.id,
-            externalOrderId: externalOrder.id,
-            resourceType: 'ORDER',
-            externalId: normalized.externalOrderId,
-            externalReference: normalized.orderNumber,
-          },
-        });
-
-        // Project Fulfillment ExternalReferences
-        for (const fulfillment of normalized.fulfillments) {
-          await this.prisma.externalReference.upsert({
-            where: {
-              organizationId_integrationId_resourceType_externalId: {
+            await tx.externalReference.upsert({
+              where: {
+                organizationId_integrationId_resourceType_externalId: {
+                  organizationId: integration.organizationId,
+                  integrationId: integration.id,
+                  resourceType: 'ORDER',
+                  externalId: normalized.externalOrderId,
+                },
+              },
+              update: {
+                externalReference: normalized.orderNumber,
+                updatedAt: new Date(),
+              },
+              create: {
                 organizationId: integration.organizationId,
                 integrationId: integration.id,
-                resourceType: 'FULFILLMENT',
-                externalId: fulfillment.fulfillmentId,
+                externalOrderId: externalOrder.id,
+                resourceType: 'ORDER',
+                externalId: normalized.externalOrderId,
+                externalReference: normalized.orderNumber,
               },
-            },
-            update: {
-              externalReference: fulfillment.trackingNumber || null,
-              updatedAt: new Date(),
-            },
-            create: {
-              organizationId: integration.organizationId,
-              integrationId: integration.id,
-              externalOrderId: externalOrder.id,
-              resourceType: 'FULFILLMENT',
-              externalId: fulfillment.fulfillmentId,
-              externalReference: fulfillment.trackingNumber || null,
-            },
-          });
-        }
+            });
 
-        totalSynced++;
+            for (const fulfillment of normalized.fulfillments) {
+              await tx.externalReference.upsert({
+                where: {
+                  organizationId_integrationId_resourceType_externalId: {
+                    organizationId: integration.organizationId,
+                    integrationId: integration.id,
+                    resourceType: 'FULFILLMENT',
+                    externalId: fulfillment.fulfillmentId,
+                  },
+                },
+                update: {
+                  externalReference: fulfillment.trackingNumber || null,
+                  updatedAt: new Date(),
+                },
+                create: {
+                  organizationId: integration.organizationId,
+                  integrationId: integration.id,
+                  externalOrderId: externalOrder.id,
+                  resourceType: 'FULFILLMENT',
+                  externalId: fulfillment.fulfillmentId,
+                  externalReference: fulfillment.trackingNumber || null,
+                },
+              });
+            }
+          }
+          return normalizedOrders.length;
+        },
+      );
+      if (!projection.current) {
+        throw new BadRequestException('Stale Shopify sync run');
       }
+      totalSynced += projection.result || 0;
 
       // Cursor pagination handling & loop prevention
       endCursor = nextCursor;
@@ -232,31 +248,12 @@ export class ShopifySyncService {
       typeof payload.syncRunId === 'string' && payload.syncRunId
         ? payload.syncRunId
         : job.id;
-    const initialIntegration = await this.prisma.integration.findUnique({
-      where: { id: integrationId },
-    });
-    if (!initialIntegration) {
-      throw new NotFoundException(`Integration ${integrationId} not found`);
-    }
-    const initialConfig =
-      (initialIntegration.configuration as Record<string, any> | null) || {};
-    if (
-      typeof initialConfig.activeSyncRunId === 'string' &&
-      initialConfig.activeSyncRunId !== syncRunId
-    ) {
+    if (!(await establishExistingSyncJobRun(this.prisma, integrationId, syncRunId))) {
+      const exists = await this.prisma.integration.count({ where: { id: integrationId } });
+      if (exists === 0) {
+        throw new NotFoundException(`Integration ${integrationId} not found`);
+      }
       throw new BadRequestException('Stale Shopify sync run');
-    }
-    if (!initialConfig.activeSyncRunId) {
-      await this.prisma.integration.update({
-        where: { id: integrationId },
-        data: {
-          configuration: {
-            ...initialConfig,
-            activeSyncRunId: syncRunId,
-            initialSyncStatus: 'SYNCING',
-          },
-        },
-      });
     }
 
     // Move job to RUNNING
@@ -272,6 +269,7 @@ export class ShopifySyncService {
       const syncResult = await this.syncRecentOrders(integrationId, {
         ...options,
         cursor: payload.cursor,
+        syncRunId,
       });
 
       // Update Integration configuration

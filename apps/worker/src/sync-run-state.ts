@@ -8,41 +8,77 @@ export function asSyncConfiguration(value: unknown): SyncConfiguration {
     : {};
 }
 
+async function lockIntegrationConfiguration(
+  tx: Prisma.TransactionClient,
+  integrationId: string,
+): Promise<SyncConfiguration | null> {
+  const locked = await tx.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT id FROM integrations WHERE id = ${integrationId}::uuid FOR UPDATE`,
+  );
+  if (locked.length === 0) return null;
+
+  const integration = await tx.integration.findUnique({
+    where: { id: integrationId },
+    select: { configuration: true },
+  });
+  return integration ? asSyncConfiguration(integration.configuration) : null;
+}
+
+export async function withCurrentSyncRunTransaction<T>(
+  prisma: PrismaClient,
+  integrationId: string,
+  syncRunId: string,
+  work: (
+    tx: Prisma.TransactionClient,
+    configuration: SyncConfiguration,
+  ) => Promise<T>,
+): Promise<{ current: boolean; result?: T }> {
+  return prisma.$transaction(
+    async (tx) => {
+      const configuration = await lockIntegrationConfiguration(tx, integrationId);
+      if (!configuration || configuration.activeSyncRunId !== syncRunId) {
+        return { current: false };
+      }
+      return { current: true, result: await work(tx, configuration) };
+    },
+    { maxWait: 5_000, timeout: 30_000 },
+  );
+}
+
 export async function establishSyncRun(
   prisma: PrismaClient,
   integrationId: string,
   configuredRunId: unknown,
   fallbackRunId: string,
 ): Promise<{ syncRunId: string; current: boolean; configuration: SyncConfiguration }> {
-  const integration = await prisma.integration.findUnique({
-    where: { id: integrationId },
-    select: { configuration: true },
-  });
-  const configuration = asSyncConfiguration(integration?.configuration);
-  const activeSyncRunId =
-    typeof configuration.activeSyncRunId === 'string'
-      ? configuration.activeSyncRunId
-      : undefined;
-  const explicitRunId =
-    typeof configuredRunId === 'string' && configuredRunId.trim()
-      ? configuredRunId.trim()
-      : undefined;
-  const syncRunId = explicitRunId || activeSyncRunId || fallbackRunId;
+  return prisma.$transaction(async (tx) => {
+    const configuration =
+      (await lockIntegrationConfiguration(tx, integrationId)) || {};
+    const activeSyncRunId =
+      typeof configuration.activeSyncRunId === 'string'
+        ? configuration.activeSyncRunId
+        : undefined;
+    const explicitRunId =
+      typeof configuredRunId === 'string' && configuredRunId.trim()
+        ? configuredRunId.trim()
+        : undefined;
+    const syncRunId = explicitRunId || activeSyncRunId || fallbackRunId;
 
-  if (activeSyncRunId) {
-    return { syncRunId, current: activeSyncRunId === syncRunId, configuration };
-  }
+    if (activeSyncRunId) {
+      return { syncRunId, current: activeSyncRunId === syncRunId, configuration };
+    }
 
-  const nextConfiguration = {
-    ...configuration,
-    activeSyncRunId: syncRunId,
-    initialSyncStatus: 'SYNCING',
-  };
-  await prisma.integration.update({
-    where: { id: integrationId },
-    data: { configuration: nextConfiguration as Prisma.InputJsonValue },
+    const nextConfiguration = {
+      ...configuration,
+      activeSyncRunId: syncRunId,
+      initialSyncStatus: 'SYNCING',
+    };
+    await tx.integration.update({
+      where: { id: integrationId },
+      data: { configuration: nextConfiguration as Prisma.InputJsonValue },
+    });
+    return { syncRunId, current: true, configuration: nextConfiguration };
   });
-  return { syncRunId, current: true, configuration: nextConfiguration };
 }
 
 export async function isCurrentSyncRun(
@@ -63,32 +99,24 @@ export async function updateCurrentSyncRun(
   syncRunId: string,
   patch: SyncConfiguration,
 ): Promise<boolean> {
-  const integration = await prisma.integration.findUnique({
-    where: { id: integrationId },
-    select: { configuration: true },
-  });
-  const configuration = asSyncConfiguration(integration?.configuration);
-  if (configuration.activeSyncRunId !== syncRunId) {
-    return false;
-  }
-
-  const updated = await prisma.integration.updateMany({
-    where: {
-      id: integrationId,
-      configuration: {
-        path: ['activeSyncRunId'],
-        equals: syncRunId,
-      },
+  const updated = await withCurrentSyncRunTransaction(
+    prisma,
+    integrationId,
+    syncRunId,
+    async (tx, configuration) => {
+      await tx.integration.update({
+        where: { id: integrationId },
+        data: {
+          configuration: {
+            ...configuration,
+            ...patch,
+            activeSyncRunId: syncRunId,
+          } as Prisma.InputJsonValue,
+        },
+      });
     },
-    data: {
-      configuration: {
-        ...configuration,
-        ...patch,
-        activeSyncRunId: syncRunId,
-      } as Prisma.InputJsonValue,
-    },
-  });
-  return updated.count === 1;
+  );
+  return updated.current;
 }
 
 export async function failCurrentSyncRun(

@@ -15,6 +15,7 @@ import {
   ShopifyClient,
 } from '@reloop/connector-shopify';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
+import { activateSyncRunWithInitialJob } from './sync-run-start';
 
 export interface ShopifyTokenResponse {
   access_token: string;
@@ -428,32 +429,17 @@ export class ShopifyOAuthService {
 
     // 10. Enqueue Durable Initial Sync Job
     const syncRunId = crypto.randomUUID();
-    const integrationConfig =
-      (integration.configuration as Record<string, unknown> | null) || {};
-    await this.prisma.integration.update({
-      where: { id: integration.id },
-      data: {
-        configuration: {
-          ...integrationConfig,
-          activeSyncRunId: syncRunId,
-          initialSyncStatus: 'SYNCING',
-        },
+    await activateSyncRunWithInitialJob(this.prisma, {
+      integrationId: integration.id,
+      organizationId,
+      syncRunId,
+      jobType: 'SHOPIFY_SYNC_ORDERS',
+      payload: {
+        integrationId: integration.id,
+        shopDomain: normalizedShop,
+        syncRunId,
       },
-    });
-    await this.prisma.job.create({
-      data: {
-        id: syncRunId,
-        organizationId,
-        type: 'SHOPIFY_SYNC_ORDERS',
-        status: 'QUEUED',
-        payload: {
-          integrationId: integration.id,
-          shopDomain: normalizedShop,
-          syncRunId,
-        },
-        idempotencyKey: `shopify_sync_run_${integration.id}_${syncRunId}`,
-        nextRunAt: new Date(),
-      },
+      idempotencyKey: `shopify_sync_run_${integration.id}_${syncRunId}`,
     });
 
     // Safe invalidation event broadcast

@@ -10,10 +10,15 @@ describe('ShopifySyncService (Read-Only Order & Fulfillment Sync)', () => {
   let tokenRefresh: any;
 
   beforeEach(async () => {
+    let lockedConfiguration: Record<string, unknown> = {};
     prisma = {
+      $queryRaw: jest.fn(async () => [{ configuration: lockedConfiguration }]),
       integration: {
         findUnique: jest.fn(),
-        update: jest.fn().mockResolvedValue({}),
+        update: jest.fn().mockImplementation(async ({ data }: any) => {
+          if (data?.configuration) lockedConfiguration = data.configuration;
+          return {};
+        }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       job: {
@@ -34,6 +39,7 @@ describe('ShopifySyncService (Read-Only Order & Fulfillment Sync)', () => {
         })),
       },
     };
+    prisma.$transaction = jest.fn(async (callback: any) => callback(prisma));
 
     tokenRefresh = {
       getValidAccessToken: jest.fn().mockResolvedValue('shpat_valid_token_123'),
