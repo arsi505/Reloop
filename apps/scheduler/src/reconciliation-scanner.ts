@@ -12,6 +12,21 @@ export interface OrderSnapshotProvider {
 
 export const RECONCILIATION_ORGANIZATION_BATCH_SIZE = 20;
 
+type TenantFailureCategory = 'snapshot_fetch' | 'reconciliation' | 'timeout';
+
+class TenantScanFailure extends Error {
+  constructor(readonly category: TenantFailureCategory) {
+    super(`Reconciliation tenant scan failed: ${category}`);
+    this.name = 'TenantScanFailure';
+  }
+}
+
+interface TenantScanResult {
+  scannedOrders: number;
+  findingsCount: number;
+  casesCount: number;
+}
+
 export class ReconciliationScanner {
   private isRunning = false;
   private isScanning = false;
@@ -113,24 +128,19 @@ export class ReconciliationScanner {
       const orgs = page.slice(0, RECONCILIATION_ORGANIZATION_BATCH_SIZE);
 
       for (const org of orgs) {
-        const snapshots = await this.snapshotProvider.fetchSnapshots(
-          org.id,
-          this.config.reconciliationScanBatchSize,
-        );
-
-        for (const snapshot of snapshots) {
-          scannedOrders++;
-          const findings = reconcileOrder(snapshot);
-          findingsCount += findings.length;
-
-          if (findings.length > 0) {
-            const cases = await this.caseDetectionService.persistFindings(
-              org.id,
-              findings,
-              snapshot.externalOrderId,
-            );
-            casesCount += cases.length;
-          }
+        try {
+          const tenantResult = await this.scanOrganization(org.id);
+          scannedOrders += tenantResult.scannedOrders;
+          findingsCount += tenantResult.findingsCount;
+          casesCount += tenantResult.casesCount;
+        } catch (error: unknown) {
+          const category =
+            error instanceof TenantScanFailure
+              ? error.category
+              : 'reconciliation';
+          console.error(
+            `[Reloop ReconciliationScanner] organization=${org.id} category=${category}`,
+          );
         }
       }
 
@@ -142,5 +152,86 @@ export class ReconciliationScanner {
     }
 
     return { scannedOrders, findingsCount, casesCount };
+  }
+
+  private async scanOrganization(organizationId: string): Promise<TenantScanResult> {
+    const deadlineAt = Date.now() + this.config.reconciliationTenantTimeoutMs;
+    let snapshots: NormalizedOrderSnapshot[];
+    try {
+      snapshots = await this.runWithinTenantDeadline(
+        () =>
+          this.snapshotProvider!.fetchSnapshots(
+            organizationId,
+            this.config.reconciliationScanBatchSize,
+          ),
+        deadlineAt,
+      );
+    } catch (error: unknown) {
+      if (error instanceof TenantScanFailure) throw error;
+      throw new TenantScanFailure('snapshot_fetch');
+    }
+
+    const result: TenantScanResult = {
+      scannedOrders: 0,
+      findingsCount: 0,
+      casesCount: 0,
+    };
+
+    for (const snapshot of snapshots) {
+      let findings;
+      try {
+        findings = reconcileOrder(snapshot);
+      } catch {
+        throw new TenantScanFailure('reconciliation');
+      }
+
+      let persistedCases: RecoveryCase[] = [];
+      if (findings.length > 0) {
+        try {
+          persistedCases = await this.runWithinTenantDeadline(
+            () =>
+              this.caseDetectionService.persistFindings(
+                organizationId,
+                findings,
+                snapshot.externalOrderId,
+              ),
+            deadlineAt,
+          );
+        } catch (error: unknown) {
+          if (error instanceof TenantScanFailure) throw error;
+          throw new TenantScanFailure('reconciliation');
+        }
+      }
+
+      result.scannedOrders++;
+      result.findingsCount += findings.length;
+      result.casesCount += persistedCases.length;
+    }
+
+    return result;
+  }
+
+  private async runWithinTenantDeadline<T>(
+    work: () => Promise<T>,
+    deadlineAt: number,
+  ): Promise<T> {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new TenantScanFailure('timeout');
+    }
+
+    let timeout: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new TenantScanFailure('timeout')),
+        remainingMs,
+      );
+    });
+
+    try {
+      return await Promise.race([Promise.resolve().then(work), timeoutPromise]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 }
