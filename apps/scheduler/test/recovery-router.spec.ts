@@ -156,6 +156,7 @@ describe('Day 13: Recovery Policy Router & Workflow Idempotency', () => {
 
       const workflowSteps = await prisma.workflowStep.findMany({
         where: { workflowId: result.workflow!.id },
+        orderBy: { position: 'asc' },
       });
       expect(workflowSteps.map((s) => s.key)).toEqual(['CHECK', 'EXECUTE', 'VERIFY']);
     });
@@ -181,6 +182,7 @@ describe('Day 13: Recovery Policy Router & Workflow Idempotency', () => {
 
       const workflowSteps = await prisma.workflowStep.findMany({
         where: { workflowId: result.workflow!.id },
+        orderBy: { position: 'asc' },
       });
       expect(workflowSteps.map((s) => s.key)).toEqual(['CHECK', 'APPROVAL', 'EXECUTE', 'VERIFY']);
     });
