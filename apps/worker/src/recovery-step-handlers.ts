@@ -4,6 +4,7 @@ import { JobExecutionError } from './errors';
 import { WorkflowStepContext } from './workflow-step-registry';
 import {
   RecoveryActionExecutor,
+  SimulatorRecoveryActionAdapter,
 } from '@reloop/connector-simulator';
 
 export interface RecoveryStepHandlerDependencies {
@@ -30,14 +31,40 @@ export function computeSafetyFingerprint(state: Record<string, unknown>): string
   return createHash('sha256').update(normalized).digest('hex').substring(0, 16);
 }
 
+function requireOrderNumber(payload: Record<string, unknown>, handlerKey: string): string {
+  const orderNumber = payload.orderNumber as string | undefined;
+  if (!orderNumber || typeof orderNumber !== 'string' || orderNumber.trim() === '') {
+    throw new JobExecutionError({
+      category: JobErrorCategory.BUSINESS_ERROR,
+      code: 'MISSING_ORDER_NUMBER',
+      message: `Authoritative orderNumber is required in payload for handler "${handlerKey}".`,
+      retryable: false,
+    });
+  }
+  return orderNumber;
+}
+
+function requireCaseId(payload: Record<string, unknown>, handlerKey: string): string {
+  const caseId = payload.caseId as string | undefined;
+  if (!caseId || typeof caseId !== 'string' || caseId.trim() === '') {
+    throw new JobExecutionError({
+      category: JobErrorCategory.BUSINESS_ERROR,
+      code: 'MISSING_CASE_ID',
+      message: `Authoritative caseId is required in payload for handler "${handlerKey}".`,
+      retryable: false,
+    });
+  }
+  return caseId;
+}
+
 /**
  * Registers canonical Day 13 recovery step handlers with the worker handler registry.
  */
 export function registerRecoveryStepHandlers(
   registry: { register: (handlerKey: string, handler: any) => void },
-  deps: RecoveryStepHandlerDependencies,
+  deps?: Partial<RecoveryStepHandlerDependencies>,
 ): void {
-  const { actionExecutor, resolveCaseCallback } = deps;
+  const actionExecutor = deps?.actionExecutor ?? new SimulatorRecoveryActionAdapter();
 
   // =========================================================================
   // 1. MISSING SHOPIFY TRACKING HANDLERS
@@ -46,7 +73,7 @@ export function registerRecoveryStepHandlers(
   // CHECK: Rereads live state from simulator; validates deterministic match; computes safety fingerprint
   registry.register('RECOVERY_CHECK_TRACKING', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || (payload.caseId as string);
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_CHECK_TRACKING');
 
     // Authoritative reread (Requirement 11)
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
@@ -141,8 +168,8 @@ export function registerRecoveryStepHandlers(
   // EXECUTE: Pre-execution fence -> Mutates simulator with stable idempotency key -> Handles commit-then-timeout
   registry.register('RECOVERY_EXECUTE_TRACKING', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || context.workflowId;
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_EXECUTE_TRACKING');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_EXECUTE_TRACKING');
 
     // Pre-execution fence: reread live state (Requirement 14 & 47)
     const currentState = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
@@ -229,11 +256,11 @@ export function registerRecoveryStepHandlers(
     };
   });
 
-  // VERIFY: Rereads authoritative systems; verifies agreement; invokes case resolution
+  // VERIFY: Rereads authoritative systems; verifies agreement; returns verification output
   registry.register('RECOVERY_VERIFY_TRACKING', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || '';
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_VERIFY_TRACKING');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_VERIFY_TRACKING');
 
     // Authoritative reread (Requirement 26 & 27)
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
@@ -262,13 +289,14 @@ export function registerRecoveryStepHandlers(
       },
       details: {
         orderNumber,
+        caseId: recoveryCaseId,
         verifiedAt: new Date().toISOString(),
       },
     };
 
-    // Invoke CaseResolutionService if provided
-    if (resolveCaseCallback && recoveryCaseId) {
-      await resolveCaseCallback({
+    // Invoke optional CaseResolution callback if provided for backward compatibility
+    if (deps?.resolveCaseCallback && recoveryCaseId) {
+      await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,
         workflowId: context.workflowId,
@@ -286,7 +314,7 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_CHECK_ORDER_3PL', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || (payload.caseId as string);
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_CHECK_ORDER_3PL');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     if (!state.shopify) {
@@ -327,8 +355,8 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_EXECUTE_ORDER_3PL', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || context.workflowId;
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
 
     const result = await actionExecutor.create3PLOrder({
       organizationId: context.organizationId,
@@ -357,8 +385,8 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_VERIFY_ORDER_3PL', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || '';
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_VERIFY_ORDER_3PL');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_VERIFY_ORDER_3PL');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     if (!state.warehouse) {
@@ -377,11 +405,16 @@ export function registerRecoveryStepHandlers(
         warehouseId: state.warehouse.id,
         warehouseStatus: state.warehouse.status,
       },
-      details: { orderNumber, verifiedAt: new Date().toISOString() },
+      details: {
+        orderNumber,
+        caseId: recoveryCaseId,
+        verifiedAt: new Date().toISOString(),
+      },
     };
 
-    if (resolveCaseCallback && recoveryCaseId) {
-      await resolveCaseCallback({
+    // Invoke optional CaseResolution callback if provided for backward compatibility
+    if (deps?.resolveCaseCallback && recoveryCaseId) {
+      await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,
         workflowId: context.workflowId,
@@ -399,7 +432,7 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_CHECK_SHIPPED_UNFULFILLED', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || (payload.caseId as string);
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_CHECK_SHIPPED_UNFULFILLED');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     const shp = state.shopify;
@@ -444,8 +477,8 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_EXECUTE_SHIPPED_UNFULFILLED', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || context.workflowId;
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     const trackingNumber =
@@ -480,8 +513,8 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_VERIFY_SHIPPED_UNFULFILLED', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
-    const recoveryCaseId = (payload.caseId as string) || '';
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_VERIFY_SHIPPED_UNFULFILLED');
+    const recoveryCaseId = requireCaseId(payload, 'RECOVERY_VERIFY_SHIPPED_UNFULFILLED');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     const shp = state.shopify;
@@ -504,11 +537,16 @@ export function registerRecoveryStepHandlers(
         warehouseStatus: wh?.status,
         trackingNumber: shp.trackingNumber,
       },
-      details: { orderNumber, verifiedAt: new Date().toISOString() },
+      details: {
+        orderNumber,
+        caseId: recoveryCaseId,
+        verifiedAt: new Date().toISOString(),
+      },
     };
 
-    if (resolveCaseCallback && recoveryCaseId) {
-      await resolveCaseCallback({
+    // Invoke optional CaseResolution callback if provided for backward compatibility
+    if (deps?.resolveCaseCallback && recoveryCaseId) {
+      await deps.resolveCaseCallback({
         caseId: recoveryCaseId,
         organizationId: context.organizationId,
         workflowId: context.workflowId,
@@ -526,7 +564,7 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_CHECK_STUCK_ORDER', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || (payload.caseId as string);
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_CHECK_STUCK_ORDER');
 
     const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
     return {
@@ -541,7 +579,7 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_INVESTIGATE_STUCK_ORDER', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_INVESTIGATE_STUCK_ORDER');
 
     // Strictly READ ONLY - ZERO mutations (Requirement 5 & 30)
     return {
@@ -556,7 +594,7 @@ export function registerRecoveryStepHandlers(
 
   registry.register('RECOVERY_VERIFY_STUCK_ORDER', async (context: WorkflowStepContext) => {
     const payload = (context.payload ?? {}) as Record<string, unknown>;
-    const orderNumber = (payload.orderNumber as string) || '';
+    const orderNumber = requireOrderNumber(payload, 'RECOVERY_VERIFY_STUCK_ORDER');
 
     // Notice: Does NOT mark case resolved! Remains open/actionable (Requirement 5)
     return {

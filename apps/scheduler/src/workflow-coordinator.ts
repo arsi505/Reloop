@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 import { WorkflowTemplateRegistry, evaluateCondition } from '@reloop/workflow-core';
 import { SchedulerConfig } from './config';
+import { CaseResolutionService } from './case-resolution/case-resolution.service';
 
 export interface WorkflowCoordinatorMetrics {
   scannedCount: number;
@@ -42,6 +43,7 @@ type StepWithJobsAndApprovals = WorkflowStep & { jobs: Job[]; approvals: Approva
 export class WorkflowCoordinator {
   private prisma: PrismaClient;
   private templateRegistry: WorkflowTemplateRegistry;
+  private caseResolutionService: CaseResolutionService;
   private scanIntervalMs: number;
   private scanBatchSize: number;
 
@@ -65,11 +67,13 @@ export class WorkflowCoordinator {
     prisma: PrismaClient,
     templateRegistry: WorkflowTemplateRegistry,
     config: Partial<SchedulerConfig> = {},
+    caseResolutionService?: CaseResolutionService,
   ) {
     this.prisma = prisma;
     this.templateRegistry = templateRegistry;
     this.scanIntervalMs = config.workflowScanIntervalMs ?? 1000;
     this.scanBatchSize = config.workflowScanBatchSize ?? 20;
+    this.caseResolutionService = caseResolutionService ?? new CaseResolutionService(prisma);
   }
 
   async start(): Promise<void> {
@@ -226,6 +230,11 @@ export class WorkflowCoordinator {
       stepMap.set(step.key, step);
     }
 
+    const stepDefMap = new Map<string, (typeof template.steps)[0]>();
+    for (const sd of template.steps) {
+      stepDefMap.set(sd.key, sd);
+    }
+
     // 3. Reconcile finished / failed / blocked step Jobs
     for (const step of steps) {
       if (step.jobs && step.jobs.length > 0) {
@@ -294,14 +303,30 @@ export class WorkflowCoordinator {
       if (step.status === WorkflowStepStatus.WAITING && step.approvals && step.approvals.length > 0) {
         const approval = step.approvals[0];
         if (approval.status === ApprovalStatus.APPROVED) {
+          const stepDef = stepDefMap.get(step.key);
+          const parentDepKey = stepDef?.dependsOn && stepDef.dependsOn.length > 0 ? stepDef.dependsOn[0] : null;
+          const parentRow = parentDepKey ? stepMap.get(parentDepKey) : null;
+          const parentOutput =
+            parentRow && parentRow.output !== null && typeof parentRow.output === 'object' && !Array.isArray(parentRow.output)
+              ? (parentRow.output as Record<string, unknown>)
+              : {};
+
+          const approvalOutput = {
+            ...parentOutput,
+            approved: true,
+            decidedAt: approval.decidedAt ?? new Date(),
+          };
+
           await this.prisma.workflowStep.update({
             where: { id: step.id },
             data: {
               status: WorkflowStepStatus.SUCCEEDED,
+              output: approvalOutput as Prisma.InputJsonValue,
               completedAt: approval.decidedAt ?? new Date(),
             },
           });
           step.status = WorkflowStepStatus.SUCCEEDED;
+          step.output = approvalOutput as any;
           if (workflow.status === WorkflowStatus.WAITING) {
             await this.prisma.workflow.update({
               where: { id: workflow.id },
@@ -329,6 +354,35 @@ export class WorkflowCoordinator {
           workflow.status = WorkflowStatus.BLOCKED;
           result.blockedWorkflows++;
           return;
+        }
+      }
+    }
+
+    // Scheduler-side case resolution guard: if VERIFY step is SUCCEEDED, resolve linked RecoveryCase
+    if (workflow.recoveryCaseId) {
+      const verifyStep = steps.find((s) => s.key === 'VERIFY');
+      if (
+        verifyStep &&
+        verifyStep.status === WorkflowStepStatus.SUCCEEDED &&
+        verifyStep.output !== null &&
+        typeof verifyStep.output === 'object'
+      ) {
+        const vOut = verifyStep.output as any;
+        if (vOut.verified === true && vOut.invariantPassed) {
+          try {
+            await this.caseResolutionService.resolveCase({
+              caseId: workflow.recoveryCaseId,
+              organizationId: workflow.organizationId,
+              workflowId: workflow.id,
+              verifyStepKey: verifyStep.key,
+              verificationOutput: vOut,
+            });
+          } catch (resErr: any) {
+            console.warn(
+              `[Reloop WorkflowCoordinator] Case resolution skipped for case ${workflow.recoveryCaseId}:`,
+              resErr?.message || resErr,
+            );
+          }
         }
       }
     }
@@ -382,7 +436,7 @@ export class WorkflowCoordinator {
         stepDef.type !== 'APPROVAL' &&
         (!stepRow.jobs || stepRow.jobs.length === 0)
       ) {
-        await this.createJobForReadyStep(workflow, stepRow, stepDef as any);
+        await this.createJobForReadyStep(workflow, stepRow, stepDef as any, stepMap);
         result.createdJobs++;
         continue;
       }
@@ -454,11 +508,43 @@ export class WorkflowCoordinator {
       }
 
       // Condition satisfied: Step transitions PENDING -> READY and Job is created atomically
-      await this.readyStepAndCreateJob(workflow, stepRow, stepDef as any);
-      stepRow.status = WorkflowStepStatus.READY;
-      result.readiedSteps++;
-      result.createdJobs++;
-      newlyActivated = true;
+      try {
+        await this.readyStepAndCreateJob(workflow, stepRow, stepDef as any, stepMap);
+        stepRow.status = WorkflowStepStatus.READY;
+        result.readiedSteps++;
+        result.createdJobs++;
+        newlyActivated = true;
+      } catch (stepErr: any) {
+        if (stepErr.message && stepErr.message.includes('Ambiguous upstream output key')) {
+          console.error(
+            `[Reloop WorkflowCoordinator] Ambiguity error in step ${stepRow.key} for workflow ${workflow.id}:`,
+            stepErr,
+          );
+          await this.prisma.workflowStep.update({
+            where: { id: stepRow.id },
+            data: {
+              status: WorkflowStepStatus.FAILED,
+              output: {
+                code: 'AMBIGUOUS_DEPENDENCY_OUTPUTS',
+                message: stepErr.message,
+              },
+              completedAt: new Date(),
+            },
+          });
+          stepRow.status = WorkflowStepStatus.FAILED;
+          stepRow.output = {
+            code: 'AMBIGUOUS_DEPENDENCY_OUTPUTS',
+            message: stepErr.message,
+          } as any;
+          await this.prisma.workflow.update({
+            where: { id: workflow.id },
+            data: { status: WorkflowStatus.FAILED, completedAt: new Date() },
+          });
+          result.failedWorkflows++;
+          return;
+        }
+        throw stepErr;
+      }
     }
 
     // 7. Workflow status derivation
@@ -487,6 +573,34 @@ export class WorkflowCoordinator {
         },
       });
       result.completedWorkflows++;
+
+      if (workflow.recoveryCaseId) {
+        const verifyStep = steps.find((s) => s.key === 'VERIFY');
+        if (
+          verifyStep &&
+          verifyStep.status === WorkflowStepStatus.SUCCEEDED &&
+          verifyStep.output !== null &&
+          typeof verifyStep.output === 'object'
+        ) {
+          const vOut = verifyStep.output as any;
+          if (vOut.verified === true && vOut.invariantPassed) {
+            try {
+              await this.caseResolutionService.resolveCase({
+                caseId: workflow.recoveryCaseId,
+                organizationId: workflow.organizationId,
+                workflowId: workflow.id,
+                verifyStepKey: verifyStep.key,
+                verificationOutput: vOut,
+              });
+            } catch (resErr: any) {
+              console.warn(
+                `[Reloop WorkflowCoordinator] Case resolution skipped for case ${workflow.recoveryCaseId}:`,
+                resErr?.message || resErr,
+              );
+            }
+          }
+        }
+      }
     } else if (workflow.status === WorkflowStatus.PENDING && newlyActivated) {
       // Rule 29: First step activation -> Workflow PENDING to RUNNING with startedAt set once
       await this.prisma.workflow.update({
@@ -501,21 +615,74 @@ export class WorkflowCoordinator {
   }
 
   /**
+   * Deterministically builds step job payload:
+   * 1. Base immutable context from step.input
+   * 2. Merged output from only declared completed dependencies (detecting ambiguity)
+   * 3. Authoritative system metadata (cannot be overridden)
+   */
+  private buildStepJobPayload(
+    workflow: Workflow,
+    step: WorkflowStep,
+    stepDef: { key: string; handlerKey: string; dependsOn?: string[] },
+    stepMap: Map<string, StepWithJobsAndApprovals>,
+  ): Record<string, unknown> {
+    const baseInput =
+      step.input !== null && typeof step.input === 'object' && !Array.isArray(step.input)
+        ? (step.input as Record<string, unknown>)
+        : {};
+
+    const mergedDependencyOutputs: Record<string, unknown> = {};
+    const seenKeys = new Map<string, string>();
+
+    for (const depKey of stepDef.dependsOn ?? []) {
+      const depRow = stepMap.get(depKey);
+      if (
+        depRow &&
+        depRow.output !== null &&
+        typeof depRow.output === 'object' &&
+        !Array.isArray(depRow.output)
+      ) {
+        const depOutputObj = depRow.output as Record<string, unknown>;
+        for (const [k, v] of Object.entries(depOutputObj)) {
+          if (seenKeys.has(k) && seenKeys.get(k) !== depKey) {
+            const previousVal = mergedDependencyOutputs[k];
+            if (JSON.stringify(previousVal) !== JSON.stringify(v)) {
+              throw new Error(
+                `Ambiguous upstream output key "${k}" with conflicting values provided by dependencies "${seenKeys.get(k)}" and "${depKey}" for step "${step.key}".`,
+              );
+            }
+          }
+          seenKeys.set(k, depKey);
+          mergedDependencyOutputs[k] = v;
+        }
+      }
+    }
+
+    return {
+      ...baseInput,
+      ...mergedDependencyOutputs,
+      templateKey: workflow.templateKey,
+      templateVersion: workflow.templateVersion,
+      stepKey: step.key,
+      handlerKey: stepDef.handlerKey,
+      workflowId: workflow.id,
+      workflowStepId: step.id,
+      organizationId: workflow.organizationId,
+    };
+  }
+
+  /**
    * Atomically transitions WorkflowStep from PENDING to READY and creates durable Job.
    * Uses ON CONFLICT (organization_id, idempotency_key) DO NOTHING for multi-coordinator race safety.
    */
   private async readyStepAndCreateJob(
     workflow: Workflow,
     step: WorkflowStep,
-    stepDef: { key: string; handlerKey: string; priority?: number; maxAttempts?: number },
+    stepDef: { key: string; handlerKey: string; priority?: number; maxAttempts?: number; dependsOn?: string[] },
+    stepMap: Map<string, StepWithJobsAndApprovals>,
   ): Promise<void> {
     const idempotencyKey = `workflow-step:${workflow.id}:${step.key}:v${workflow.templateVersion}`;
-    const payload = {
-      templateKey: workflow.templateKey,
-      templateVersion: workflow.templateVersion,
-      stepKey: step.key,
-      handlerKey: stepDef.handlerKey,
-    };
+    const payload = this.buildStepJobPayload(workflow, step, stepDef, stepMap);
 
     await this.prisma.$transaction(async (tx) => {
       // 1. Mark step READY
@@ -569,15 +736,11 @@ export class WorkflowCoordinator {
   private async createJobForReadyStep(
     workflow: Workflow,
     step: WorkflowStep,
-    stepDef: { key: string; handlerKey: string; priority?: number; maxAttempts?: number },
+    stepDef: { key: string; handlerKey: string; priority?: number; maxAttempts?: number; dependsOn?: string[] },
+    stepMap: Map<string, StepWithJobsAndApprovals>,
   ): Promise<void> {
     const idempotencyKey = `workflow-step:${workflow.id}:${step.key}:v${workflow.templateVersion}`;
-    const payload = {
-      templateKey: workflow.templateKey,
-      templateVersion: workflow.templateVersion,
-      stepKey: step.key,
-      handlerKey: stepDef.handlerKey,
-    };
+    const payload = this.buildStepJobPayload(workflow, step, stepDef, stepMap);
 
     await this.prisma.$executeRaw`
       INSERT INTO jobs (

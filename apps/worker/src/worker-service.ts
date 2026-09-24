@@ -13,6 +13,8 @@ import { WorkflowStepHandlerRegistry } from './workflow-step-registry';
 import { WorkflowStepExecutor } from './workflow-step-executor';
 import { ShopifySyncJobExecutor } from './shopify-sync-executor';
 import { ShipStationSyncJobExecutor } from './shipstation-sync-executor';
+import { SimulatorRecoveryActionAdapter } from '@reloop/connector-simulator';
+import { registerRecoveryStepHandlers } from './recovery-step-handlers';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -49,6 +51,7 @@ export class WorkerService {
       retryPolicy?: RetryPolicy;
       shopifySyncExecutor?: ShopifySyncJobExecutor;
       shipstationSyncExecutor?: ShipStationSyncJobExecutor;
+      actionExecutor?: any;
       fetchFn?: typeof fetch;
     } = {},
   ) {
@@ -56,6 +59,11 @@ export class WorkerService {
     this.prisma = prisma;
     this.executorRegistry = options.executorRegistry ?? new JobExecutorRegistry();
     this.stepHandlerRegistry = options.stepHandlerRegistry ?? new WorkflowStepHandlerRegistry();
+
+    if (!this.stepHandlerRegistry.has('RECOVERY_CHECK_TRACKING')) {
+      const actionExecutor = options.actionExecutor ?? new SimulatorRecoveryActionAdapter();
+      registerRecoveryStepHandlers(this.stepHandlerRegistry, { actionExecutor });
+    }
 
     if (!this.executorRegistry.has('WORKFLOW_STEP')) {
       const stepExecutor = new WorkflowStepExecutor(this.prisma, this.stepHandlerRegistry);

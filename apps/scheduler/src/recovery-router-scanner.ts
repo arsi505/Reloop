@@ -26,12 +26,20 @@ export class RecoveryRouterScanner {
     }, this.config.recoveryRouterScanIntervalMs);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.running = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+
+    while (this.isScanning) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  getIsRunning(): boolean {
+    return this.running;
   }
 
   /**

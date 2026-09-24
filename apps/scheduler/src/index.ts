@@ -1,9 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-import { WorkflowTemplateRegistry, registerSystemTemplates } from '@reloop/workflow-core';
-import { loadSchedulerConfig } from './config';
-import { RedisPublisher } from './redis-publisher';
-import { SchedulerService } from './scheduler-service';
-import { WorkflowCoordinator } from './workflow-coordinator';
+import { createSchedulerRuntime } from './runtime';
 
 export * from './config';
 export * from './redis-publisher';
@@ -11,23 +6,19 @@ export * from './job-scanner';
 export * from './scheduler-service';
 export * from './workflow-coordinator';
 export * from './workflow-creator';
+export * from './recovery-router-scanner';
+export * from './reconciliation-scanner';
+export * from './runtime';
 
 async function bootstrap() {
-  const config = loadSchedulerConfig();
+  const runtime = createSchedulerRuntime();
+  const config = runtime.config;
   console.log(`[Reloop Scheduler] Initializing scheduler instance: ${config.instanceId}`);
   console.log(`[Reloop Scheduler] Configuration: Redis=${config.redisUrl}, Stream=${config.jobStreamKey}, Group=${config.jobConsumerGroup}, Interval=${config.schedulerIntervalMs}ms, Batch=${config.schedulerBatchSize}, MarkerTTL=${config.dispatchMarkerTtlMs}ms`);
 
-  const prisma = new PrismaClient();
-  const publisher = new RedisPublisher(config);
-  const templateRegistry = new WorkflowTemplateRegistry();
-  registerSystemTemplates(templateRegistry);
-  const coordinator = new WorkflowCoordinator(prisma, templateRegistry, config);
-  const scheduler = new SchedulerService(config, prisma, publisher, coordinator);
-
   const shutdown = async (signal: string) => {
     console.log(`[Reloop Scheduler] Received ${signal}. Initiating graceful shutdown...`);
-    await scheduler.stop();
-    await prisma.$disconnect();
+    await runtime.stop();
     console.log('[Reloop Scheduler] Graceful shutdown complete. Exiting.');
     process.exit(0);
   };
@@ -36,12 +27,11 @@ async function bootstrap() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   try {
-    await scheduler.start();
+    await runtime.start();
     console.log('[Reloop Scheduler] Scheduler is running actively.');
   } catch (err) {
     console.error('[Reloop Scheduler] Fatal error starting scheduler:', err);
-    await scheduler.stop().catch(() => {});
-    await prisma.$disconnect().catch(() => {});
+    await runtime.stop().catch(() => {});
     process.exit(1);
   }
 }

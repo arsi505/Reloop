@@ -42,6 +42,10 @@ export class ReconciliationScanner {
     }
   }
 
+  getIsRunning(): boolean {
+    return this.isRunning;
+  }
+
   private scheduleNextTick(): void {
     if (!this.isRunning) return;
 

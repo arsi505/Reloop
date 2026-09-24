@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-import { loadWorkerConfig } from './config';
-import { WorkerService } from './worker-service';
+import { createWorkerRuntime } from './runtime';
 
 export * from './config';
 export * from './errors';
@@ -16,21 +14,19 @@ export * from './workflow-step-executor';
 export * from './recovery-step-handlers';
 export * from './shopify-sync-executor';
 export * from './worker-service';
+export * from './runtime';
 
 async function bootstrap() {
-  const config = loadWorkerConfig();
+  const runtime = createWorkerRuntime();
+  const config = runtime.config;
   console.log(`[Reloop Worker] Initializing worker instance: ${config.workerKey} (${config.workerConsumerName})`);
   console.log(
     `[Reloop Worker] Configuration: Redis=${config.redisUrl}, Stream=${config.jobStreamKey}, Group=${config.jobConsumerGroup}, Concurrency=${config.workerConcurrency}, Lease=${config.jobLeaseDurationMs}ms, RenewInterval=${config.jobLeaseRenewIntervalMs}ms`,
   );
 
-  const prisma = new PrismaClient();
-  const workerService = new WorkerService(config, prisma);
-
   const shutdown = async (signal: string) => {
     console.log(`[Reloop Worker] Received ${signal}. Initiating graceful shutdown...`);
-    await workerService.stop();
-    await prisma.$disconnect();
+    await runtime.stop();
     console.log('[Reloop Worker] Graceful shutdown complete. Exiting.');
     process.exit(0);
   };
@@ -39,12 +35,11 @@ async function bootstrap() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   try {
-    await workerService.start();
+    await runtime.start();
     console.log('[Reloop Worker] Worker engine running actively.');
   } catch (err) {
     console.error('[Reloop Worker] Fatal error starting worker:', err);
-    await workerService.stop().catch(() => {});
-    await prisma.$disconnect().catch(() => {});
+    await runtime.stop().catch(() => {});
     process.exit(1);
   }
 }

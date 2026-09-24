@@ -115,7 +115,13 @@ export class RecoveryRouterService {
       }
 
       // 8. Create Workflow instance
-      const orderNumber = recoveryCase.dedupeKey ? recoveryCase.dedupeKey.split(':')[0] : undefined;
+      const orderNumber =
+        (recoveryCase.evidence &&
+        typeof recoveryCase.evidence === 'object' &&
+        !Array.isArray(recoveryCase.evidence) &&
+        (recoveryCase.evidence as Record<string, unknown>).orderNumber)
+          ? ((recoveryCase.evidence as Record<string, unknown>).orderNumber as string)
+          : (recoveryCase.dedupeKey ? recoveryCase.dedupeKey.split(':')[0] : undefined);
       const workflow = await this.workflowCreationService.createWorkflowInstance({
         organizationId,
         templateKey: decision.templateKey,

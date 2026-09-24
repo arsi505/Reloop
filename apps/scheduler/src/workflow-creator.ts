@@ -126,7 +126,7 @@ export class WorkflowCreationService {
               name: stepDef.name,
               position: i + 1,
               status: WorkflowStepStatus.PENDING,
-              input: (i === 0 && input) ? (input as Prisma.InputJsonValue) : undefined,
+              input: input ? (input as Prisma.InputJsonValue) : undefined,
               dependsOnStepId,
             },
           });
