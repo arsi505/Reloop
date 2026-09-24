@@ -14,6 +14,13 @@ import {
 import { EncryptedCredentialEnvelope, StoredShipStationCredential } from '@reloop/integration-sdk';
 import { JobContext } from './executor';
 import { JobExecutionError } from './errors';
+import {
+  asSyncConfiguration,
+  establishSyncRun,
+  failCurrentSyncRun,
+  isCurrentSyncRun,
+  updateCurrentSyncRun,
+} from './sync-run-state';
 
 export interface ShipStationSyncExecutorOptions {
   encryptionKey?: string;
@@ -29,6 +36,8 @@ export interface ShipStationSyncJobResult {
   watermarkAdvancedTo?: string;
   nextPage?: number | null;
   continuationJobId?: string | null;
+  syncRunId: string;
+  currentRun: boolean;
 }
 
 export class ShipStationSyncJobExecutor {
@@ -99,6 +108,25 @@ export class ShipStationSyncJobExecutor {
         message: `Integration ${integrationId} is DISCONNECTED; sync cancelled`,
         retryable: false,
       });
+    }
+
+    const runState = await establishSyncRun(
+      this.prisma,
+      integrationId,
+      payload.syncRunId,
+      context.jobId,
+    );
+    const syncRunId = runState.syncRunId;
+    if (!runState.current) {
+      return {
+        integrationId: integration.id,
+        totalShipmentsSynced: 0,
+        pagesProcessed: 0,
+        complete: false,
+        continuationJobId: null,
+        syncRunId,
+        currentRun: false,
+      };
     }
 
     // 5. Decrypt credentials inside execution boundary
@@ -218,6 +246,21 @@ export class ShipStationSyncJobExecutor {
           sortBy: 'modified_at',
           sortDir: 'asc',
         });
+
+        if (pageRes.page !== currentPage) {
+          await failCurrentSyncRun(
+            this.prisma,
+            integrationId,
+            syncRunId,
+            'SHIPSTATION_SYNC_NO_PROGRESS',
+          );
+          throw new JobExecutionError({
+            category: JobErrorCategory.BUSINESS_ERROR,
+            code: 'SHIPSTATION_SYNC_NO_PROGRESS',
+            message: `ShipStation pagination did not advance as requested for integration ${integrationId}`,
+            retryable: false,
+          });
+        }
 
         if (!pageRes.shipments || pageRes.shipments.length === 0) {
           break;
@@ -420,8 +463,11 @@ export class ShipStationSyncJobExecutor {
 
       if (err instanceof ShipStationUnauthorizedError) {
         // Mark integration DEGRADED
-        await this.prisma.integration.update({
-          where: { id: integrationId },
+        await this.prisma.integration.updateMany({
+          where: {
+            id: integrationId,
+            configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+          },
           data: { status: 'DEGRADED' },
         });
 
@@ -472,9 +518,36 @@ export class ShipStationSyncJobExecutor {
     // Reaching maxShipments cap represents bounded work completion, NOT provider sync completion.
     const complete = !hasMorePages;
 
+    if (!(await isCurrentSyncRun(this.prisma, integrationId, syncRunId))) {
+      return {
+        integrationId: integration.id,
+        totalShipmentsSynced: totalSynced,
+        pagesProcessed,
+        complete: false,
+        nextPage: currentPage,
+        continuationJobId: null,
+        syncRunId,
+        currentRun: false,
+      };
+    }
+
     let continuationJobId: string | null = null;
     if (hasMorePages) {
-      const continuationIdempotencyKey = `shipstation_sync_continuation_${integration.id}_page_${currentPage}`;
+      if (currentPage <= (typeof payload.page === 'number' ? payload.page : 0)) {
+        await failCurrentSyncRun(
+          this.prisma,
+          integrationId,
+          syncRunId,
+          'SHIPSTATION_SYNC_NO_PROGRESS',
+        );
+        throw new JobExecutionError({
+          category: JobErrorCategory.BUSINESS_ERROR,
+          code: 'SHIPSTATION_SYNC_NO_PROGRESS',
+          message: `ShipStation continuation page did not advance for integration ${integrationId}`,
+          retryable: false,
+        });
+      }
+      const continuationIdempotencyKey = `shipstation_sync_continuation_${integration.id}_${syncRunId}_page_${currentPage}`;
       const continuationJob = await this.prisma.job.upsert({
         where: {
           organizationId_idempotencyKey: {
@@ -492,6 +565,7 @@ export class ShipStationSyncJobExecutor {
           priority: 50,
           payload: {
             integrationId: integration.id,
+            syncRunId,
             page: currentPage,
             maxShipments,
             modifiedAtStart,
@@ -511,21 +585,16 @@ export class ShipStationSyncJobExecutor {
       ? latestModifiedAtObserved.toISOString()
       : modifiedAtEnd;
 
-    await this.prisma.integration.update({
-      where: { id: integrationId },
-      data: {
-        configuration: {
-          ...currentConfig,
-          initialSyncStatus: complete ? 'COMPLETED' : 'SYNCING',
-          lastSyncAt: new Date().toISOString(),
-          lastSyncShipmentsCount:
-            (!payload.page || payload.page === 1)
-              ? totalSynced
-              : (currentConfig.lastSyncShipmentsCount || 0) + totalSynced,
-          continuationPage: complete ? null : currentPage,
-          lastSuccessfulSyncWatermark: newWatermark,
-        },
-      },
+    const latestConfig = asSyncConfiguration(currentConfig) as Record<string, any>;
+    const currentRun = await updateCurrentSyncRun(this.prisma, integrationId, syncRunId, {
+      initialSyncStatus: complete ? 'COMPLETED' : 'SYNCING',
+      lastSyncAt: new Date().toISOString(),
+      lastSyncShipmentsCount:
+        (!payload.page || payload.page === 1)
+          ? totalSynced
+          : (latestConfig.lastSyncShipmentsCount || 0) + totalSynced,
+      continuationPage: complete ? null : currentPage,
+      lastSuccessfulSyncWatermark: newWatermark,
     });
 
     // 9. Return safe result metadata (ZERO secrets)
@@ -533,10 +602,12 @@ export class ShipStationSyncJobExecutor {
       integrationId: integration.id,
       totalShipmentsSynced: totalSynced,
       pagesProcessed,
-      complete,
+      complete: complete && currentRun,
       nextPage: complete ? undefined : currentPage,
-      continuationJobId,
+      continuationJobId: currentRun ? continuationJobId : null,
       watermarkAdvancedTo: newWatermark,
+      syncRunId,
+      currentRun,
     };
   }
 }

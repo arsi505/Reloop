@@ -32,7 +32,7 @@ describe('ShopifyOAuthService', () => {
         create: jest.fn(),
       },
       job: {
-        upsert: jest.fn().mockResolvedValue({ id: 'job-123' }),
+        create: jest.fn().mockResolvedValue({ id: 'job-123' }),
       },
     };
 
@@ -307,27 +307,24 @@ describe('ShopifyOAuthService', () => {
       expect(Math.abs(actualRefreshExpiryMs - expectedRefreshExpiryMs)).toBeLessThan(5000);
 
       // 4. Verify durable initial sync Job was enqueued
-      expect(prisma.job.upsert).toHaveBeenCalledWith({
-        where: {
-          organizationId_idempotencyKey: {
-            organizationId: 'org-100',
-            idempotencyKey: 'shopify_initial_sync_integration-created-id',
-          },
-        },
-        update: expect.objectContaining({
-          status: 'QUEUED',
-        }),
-        create: expect.objectContaining({
+      expect(prisma.job.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          id: expect.any(String),
           organizationId: 'org-100',
           type: 'SHOPIFY_SYNC_ORDERS',
           status: 'QUEUED',
-          payload: {
+          payload: expect.objectContaining({
             integrationId: 'integration-created-id',
             shopDomain: 'store.myshopify.com',
-          },
-          idempotencyKey: 'shopify_initial_sync_integration-created-id',
+            syncRunId: expect.any(String),
+          }),
+          idempotencyKey: expect.stringMatching(
+            /^shopify_sync_run_integration-created-id_[0-9a-f-]+$/,
+          ),
         }),
       });
+      const syncJobData = prisma.job.create.mock.calls[0][0].data;
+      expect(syncJobData.payload.syncRunId).toBe(syncJobData.id);
 
       // 5. Verify AuditLog
       expect(prisma.auditLog.create).toHaveBeenCalledWith({

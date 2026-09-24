@@ -86,6 +86,15 @@ export class ShopifySyncService {
         after: endCursor || undefined,
       });
 
+      const inputCursor = endCursor;
+      const nextCursor = page.pageInfo.endCursor;
+      if (
+        page.pageInfo.hasNextPage &&
+        (!nextCursor || nextCursor === inputCursor || seenCursors.has(nextCursor))
+      ) {
+        throw new BadRequestException('SHOPIFY_SYNC_NO_PROGRESS');
+      }
+
       if (!page.orders || page.orders.length === 0) {
         hasNextPage = false;
         break;
@@ -177,14 +186,10 @@ export class ShopifySyncService {
       }
 
       // Cursor pagination handling & loop prevention
-      endCursor = page.pageInfo.endCursor;
+      endCursor = nextCursor;
       hasNextPage = page.pageInfo.hasNextPage && !!endCursor;
 
       if (endCursor) {
-        if (seenCursors.has(endCursor)) {
-          this.logger.warn(`Duplicate cursor "${endCursor}" detected; stopping pagination to prevent infinite loop.`);
-          break;
-        }
         seenCursors.add(endCursor);
       }
     }
@@ -223,6 +228,36 @@ export class ShopifySyncService {
     if (!integrationId) {
       throw new BadRequestException(`Job ${jobId} payload missing integrationId`);
     }
+    const syncRunId =
+      typeof payload.syncRunId === 'string' && payload.syncRunId
+        ? payload.syncRunId
+        : job.id;
+    const initialIntegration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+    });
+    if (!initialIntegration) {
+      throw new NotFoundException(`Integration ${integrationId} not found`);
+    }
+    const initialConfig =
+      (initialIntegration.configuration as Record<string, any> | null) || {};
+    if (
+      typeof initialConfig.activeSyncRunId === 'string' &&
+      initialConfig.activeSyncRunId !== syncRunId
+    ) {
+      throw new BadRequestException('Stale Shopify sync run');
+    }
+    if (!initialConfig.activeSyncRunId) {
+      await this.prisma.integration.update({
+        where: { id: integrationId },
+        data: {
+          configuration: {
+            ...initialConfig,
+            activeSyncRunId: syncRunId,
+            initialSyncStatus: 'SYNCING',
+          },
+        },
+      });
+    }
 
     // Move job to RUNNING
     await this.prisma.job.update({
@@ -246,11 +281,15 @@ export class ShopifySyncService {
 
       if (integration) {
         const currentConfig = (integration.configuration as Record<string, any>) || {};
-        await this.prisma.integration.update({
-          where: { id: integrationId },
+        await this.prisma.integration.updateMany({
+          where: {
+            id: integrationId,
+            configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+          },
           data: {
             configuration: {
               ...currentConfig,
+              activeSyncRunId: syncRunId,
               initialSyncStatus: syncResult.complete ? 'COMPLETED' : 'SYNCING',
               lastSyncAt: new Date().toISOString(),
               lastSyncOrdersCount: (currentConfig.lastSyncOrdersCount || 0) + syncResult.totalOrdersSynced,
@@ -273,6 +312,31 @@ export class ShopifySyncService {
       return syncResult;
     } catch (err: any) {
       this.logger.error(`Error processing sync job ${jobId}: ${err.message}`, err.stack);
+      const latest = await this.prisma.integration.findUnique({
+        where: { id: integrationId },
+      });
+      const latestConfig = (latest?.configuration as Record<string, any> | null) || {};
+      if (latestConfig.activeSyncRunId === syncRunId) {
+        await this.prisma.integration.updateMany({
+          where: {
+            id: integrationId,
+            configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+          },
+          data: {
+            configuration: {
+              ...latestConfig,
+              activeSyncRunId: syncRunId,
+              initialSyncStatus: 'FAILED',
+              continuationCursor: null,
+              lastSyncErrorCode:
+                err instanceof BadRequestException && err.message === 'SHOPIFY_SYNC_NO_PROGRESS'
+                  ? 'SHOPIFY_SYNC_NO_PROGRESS'
+                  : 'SHOPIFY_SYNC_FAILED',
+              lastSyncFailedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
       await this.prisma.job.update({
         where: { id: jobId },
         data: {

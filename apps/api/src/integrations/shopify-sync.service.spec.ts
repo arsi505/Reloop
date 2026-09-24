@@ -14,6 +14,7 @@ describe('ShopifySyncService (Read-Only Order & Fulfillment Sync)', () => {
       integration: {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       job: {
         findUnique: jest.fn(),
@@ -237,8 +238,11 @@ describe('ShopifySyncService (Read-Only Order & Fulfillment Sync)', () => {
       );
 
       // Verify Integration updated with COMPLETED
-      expect(prisma.integration.update).toHaveBeenCalledWith({
-        where: { id: 'int-sync-job' },
+      expect(prisma.integration.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'int-sync-job',
+          configuration: { path: ['activeSyncRunId'], equals: 'job-sync-1' },
+        },
         data: {
           configuration: expect.objectContaining({
             initialSyncStatus: 'COMPLETED',

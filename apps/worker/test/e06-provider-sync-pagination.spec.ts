@@ -235,8 +235,9 @@ describe('Audit Remediation E-06: Provider Sync Pagination Truthful Completion',
     expect(continuationJob?.status).toBe(JobStatus.QUEUED);
     expect(continuationJob?.type).toBe('SHOPIFY_SYNC_ORDERS');
     expect((continuationJob?.payload as any)?.cursor).toBe('cursor_gid://shopify/Order/1049');
+    expect((continuationJob?.payload as any)?.syncRunId).toBe('job-shopify-chunk-1');
     expect(continuationJob?.idempotencyKey).toBe(
-      `shopify_sync_continuation_${integration.id}_cursor_gid://shopify/Order/1049`,
+      `shopify_sync_continuation_${integration.id}_job-shopify-chunk-1_cursor_gid://shopify/Order/1049`,
     );
 
     // Verify Integration is marked SYNCING, NOT COMPLETED

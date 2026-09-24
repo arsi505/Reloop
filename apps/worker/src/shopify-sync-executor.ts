@@ -10,6 +10,13 @@ import {
 import { EncryptedCredentialEnvelope, StoredShopifyCredential } from '@reloop/integration-sdk';
 import { JobContext } from './executor';
 import { JobExecutionError } from './errors';
+import {
+  asSyncConfiguration,
+  establishSyncRun,
+  failCurrentSyncRun,
+  isCurrentSyncRun,
+  updateCurrentSyncRun,
+} from './sync-run-state';
 
 export interface ShopifySyncExecutorOptions {
   encryptionKey?: string;
@@ -28,6 +35,8 @@ export interface ShopifySyncJobResult {
   complete: boolean;
   nextCursor?: string | null;
   continuationJobId?: string | null;
+  syncRunId: string;
+  currentRun: boolean;
 }
 
 export class ShopifySyncJobExecutor {
@@ -126,6 +135,26 @@ export class ShopifySyncJobExecutor {
       });
     }
 
+    const runState = await establishSyncRun(
+      this.prisma,
+      integrationId,
+      payload.syncRunId,
+      context.jobId,
+    );
+    const syncRunId = runState.syncRunId;
+    if (!runState.current) {
+      return {
+        integrationId: integration.id,
+        shopDomain,
+        totalOrdersSynced: 0,
+        pagesProcessed: 0,
+        complete: false,
+        continuationJobId: null,
+        syncRunId,
+        currentRun: false,
+      };
+    }
+
     // 5. Decrypt credentials only inside execution boundary
     let creds: StoredShopifyCredential;
     try {
@@ -154,8 +183,11 @@ export class ShopifySyncJobExecutor {
     if (tokenExpiresAtMs <= now + expiryBufferMs) {
       if (!creds.refreshToken) {
         // Expired and no refresh token
-        await this.prisma.integration.update({
-          where: { id: integrationId },
+        await this.prisma.integration.updateMany({
+          where: {
+            id: integrationId,
+            configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+          },
           data: { status: 'DEGRADED' },
         });
         await this.prisma.auditLog.create({
@@ -226,8 +258,11 @@ export class ShopifySyncJobExecutor {
         }
 
         // Permanent failure (400 invalid_grant, 401, etc.)
-        await this.prisma.integration.update({
-          where: { id: integrationId },
+        await this.prisma.integration.updateMany({
+          where: {
+            id: integrationId,
+            configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+          },
           data: { status: 'DEGRADED' },
         });
         await this.prisma.auditLog.create({
@@ -270,8 +305,11 @@ export class ShopifySyncJobExecutor {
       };
 
       const reencrypted = encryptCredentials(updatedCreds, this.encryptionKey);
-      await this.prisma.integration.update({
-        where: { id: integrationId },
+      await this.prisma.integration.updateMany({
+        where: {
+          id: integrationId,
+          configuration: { path: ['activeSyncRunId'], equals: syncRunId },
+        },
         data: {
           encryptedCredentials: reencrypted as unknown as object,
         },
@@ -304,6 +342,26 @@ export class ShopifySyncJobExecutor {
           first: pageSize,
           after: endCursor || undefined,
         });
+
+        const inputCursor = endCursor;
+        const nextCursor = page.pageInfo.endCursor;
+        if (
+          page.pageInfo.hasNextPage &&
+          (!nextCursor || nextCursor === inputCursor || seenCursors.has(nextCursor))
+        ) {
+          await failCurrentSyncRun(
+            this.prisma,
+            integrationId,
+            syncRunId,
+            'SHOPIFY_SYNC_NO_PROGRESS',
+          );
+          throw new JobExecutionError({
+            category: JobErrorCategory.BUSINESS_ERROR,
+            code: 'SHOPIFY_SYNC_NO_PROGRESS',
+            message: `Shopify pagination did not advance for integration ${integrationId}`,
+            retryable: false,
+          });
+        }
 
         if (!page.orders || page.orders.length === 0) {
           hasNextPage = false;
@@ -395,13 +453,10 @@ export class ShopifySyncJobExecutor {
           totalSynced++;
         }
 
-        endCursor = page.pageInfo.endCursor;
+        endCursor = nextCursor;
         hasNextPage = page.pageInfo.hasNextPage && !!endCursor;
 
         if (endCursor) {
-          if (seenCursors.has(endCursor)) {
-            break;
-          }
           seenCursors.add(endCursor);
         }
       }
@@ -441,9 +496,23 @@ export class ShopifySyncJobExecutor {
     const isExhausted = !hasNextPage;
     const complete = isExhausted;
 
+    if (!(await isCurrentSyncRun(this.prisma, integrationId, syncRunId))) {
+      return {
+        integrationId: integration.id,
+        shopDomain,
+        totalOrdersSynced: totalSynced,
+        pagesProcessed,
+        complete: false,
+        nextCursor: endCursor,
+        continuationJobId: null,
+        syncRunId,
+        currentRun: false,
+      };
+    }
+
     let continuationJobId: string | null = null;
     if (!isExhausted && endCursor) {
-      const continuationIdempotencyKey = `shopify_sync_continuation_${integration.id}_${endCursor}`;
+      const continuationIdempotencyKey = `shopify_sync_continuation_${integration.id}_${syncRunId}_${endCursor}`;
       const continuationJob = await this.prisma.job.upsert({
         where: {
           organizationId_idempotencyKey: {
@@ -462,6 +531,7 @@ export class ShopifySyncJobExecutor {
           payload: {
             integrationId: integration.id,
             shopDomain,
+            syncRunId,
             maxOrders,
             cursor: endCursor,
             parentJobId: context.jobId,
@@ -477,20 +547,14 @@ export class ShopifySyncJobExecutor {
     // 9. Update Integration configuration:
     // Only mark initialSyncStatus = COMPLETED if provider is genuinely exhausted.
     // If provider has more records, retain SYNCING and checkpoint continuationCursor.
-    const currentConfig = (integration.configuration as Record<string, any>) || {};
-    await this.prisma.integration.update({
-      where: { id: integrationId },
-      data: {
-        configuration: {
-          ...currentConfig,
-          initialSyncStatus: isExhausted ? 'COMPLETED' : 'SYNCING',
-          lastSyncAt: new Date().toISOString(),
-          lastSyncOrdersCount: !payload.cursor
-            ? totalSynced
-            : (currentConfig.lastSyncOrdersCount || 0) + totalSynced,
-          continuationCursor: isExhausted ? null : endCursor,
-        },
-      },
+    const currentConfig = asSyncConfiguration(integration.configuration) as Record<string, any>;
+    const currentRun = await updateCurrentSyncRun(this.prisma, integrationId, syncRunId, {
+      initialSyncStatus: isExhausted ? 'COMPLETED' : 'SYNCING',
+      lastSyncAt: new Date().toISOString(),
+      lastSyncOrdersCount: !payload.cursor
+        ? totalSynced
+        : (currentConfig.lastSyncOrdersCount || 0) + totalSynced,
+      continuationCursor: isExhausted ? null : endCursor,
     });
 
     // 10. Return safe result metadata (ZERO plaintext tokens, secrets, or raw headers)
@@ -499,9 +563,11 @@ export class ShopifySyncJobExecutor {
       shopDomain,
       totalOrdersSynced: totalSynced,
       pagesProcessed,
-      complete,
+      complete: complete && currentRun,
       nextCursor: isExhausted ? undefined : endCursor,
-      continuationJobId,
+      continuationJobId: currentRun ? continuationJobId : null,
+      syncRunId,
+      currentRun,
     };
   }
 }

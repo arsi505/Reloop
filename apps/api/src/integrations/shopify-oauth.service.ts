@@ -427,27 +427,31 @@ export class ShopifyOAuthService {
     });
 
     // 10. Enqueue Durable Initial Sync Job
-    await this.prisma.job.upsert({
-      where: {
-        organizationId_idempotencyKey: {
-          organizationId,
-          idempotencyKey: `shopify_initial_sync_${integration.id}`,
+    const syncRunId = crypto.randomUUID();
+    const integrationConfig =
+      (integration.configuration as Record<string, unknown> | null) || {};
+    await this.prisma.integration.update({
+      where: { id: integration.id },
+      data: {
+        configuration: {
+          ...integrationConfig,
+          activeSyncRunId: syncRunId,
+          initialSyncStatus: 'SYNCING',
         },
       },
-      update: {
-        status: 'QUEUED',
-        nextRunAt: new Date(),
-        updatedAt: new Date(),
-      },
-      create: {
+    });
+    await this.prisma.job.create({
+      data: {
+        id: syncRunId,
         organizationId,
         type: 'SHOPIFY_SYNC_ORDERS',
         status: 'QUEUED',
         payload: {
           integrationId: integration.id,
           shopDomain: normalizedShop,
+          syncRunId,
         },
-        idempotencyKey: `shopify_initial_sync_${integration.id}`,
+        idempotencyKey: `shopify_sync_run_${integration.id}_${syncRunId}`,
         nextRunAt: new Date(),
       },
     });

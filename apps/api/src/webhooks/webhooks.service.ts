@@ -20,7 +20,7 @@ export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
   private readonly adapterRegistry: WebhookAdapterRegistry;
   private readonly maxPayloadBytes: number;
-  private readonly defaultSecret: string;
+  private readonly simulatorSecret: string;
   private readonly shopifyClientSecret: string;
   private readonly requiredScopes: string[];
 
@@ -34,7 +34,7 @@ export class WebhooksService {
 
     this.maxPayloadBytes =
       this.configService.get<number>('webhookMaxPayloadBytes') || 1048576; // 1MB
-    this.defaultSecret =
+    this.simulatorSecret =
       this.configService.get<string>('simulatorWebhookSecret') ||
       'reloop_simulator_webhook_secret_dev';
     this.shopifyClientSecret =
@@ -131,19 +131,25 @@ export class WebhooksService {
     // 3. Resolve signing secret
     const config = (integration.configuration as Record<string, any>) || {};
     let secret: string;
+    let signature: string | undefined;
     if (upperProvider === 'SHOPIFY') {
-      secret = config.webhookSecret || this.shopifyClientSecret || this.defaultSecret;
+      secret = config.webhookSecret || this.shopifyClientSecret;
+      signature = this.getHeader(headers, 'x-shopify-hmac-sha256');
+      if (!secret) {
+        this.logger.warn(
+          `Rejected Shopify webhook: signing configuration unavailable for integration ${integration.id}`,
+        );
+        throw new UnauthorizedException('Invalid webhook signature');
+      }
     } else {
-      secret = config.webhookSecret || this.defaultSecret;
+      secret = config.webhookSecret || this.simulatorSecret;
+      signature =
+        this.getHeader(headers, 'x-reloop-signature') ||
+        this.getHeader(headers, 'x-simulator-signature') ||
+        this.getHeader(headers, 'x-hub-signature-256');
     }
 
     // 4. Extract signature from headers
-    const signature =
-      this.getHeader(headers, 'x-shopify-hmac-sha256') ||
-      this.getHeader(headers, 'x-reloop-signature') ||
-      this.getHeader(headers, 'x-simulator-signature') ||
-      this.getHeader(headers, 'x-hub-signature-256');
-
     if (!signature) {
       this.logger.warn(`Rejected webhook: missing signature header for integration ${integration.id}`);
       throw new UnauthorizedException('Missing required webhook signature header');

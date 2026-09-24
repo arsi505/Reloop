@@ -8,6 +8,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ShipStationClient,
@@ -84,7 +85,8 @@ export class ShipStationConnectionService {
 
     const encryptedEnvelope = encryptCredentials(credentialsToStore, this.encryptionKey);
 
-    // 3. Upsert Integration for organization
+    // 3. Upsert Integration for organization and establish a durable sync-run identity
+    const syncRunId = randomUUID();
     const existing = await this.prisma.integration.findFirst({
       where: {
         organizationId,
@@ -104,7 +106,8 @@ export class ShipStationConnectionService {
           configuration: {
             ...((existing.configuration as Record<string, unknown>) || {}),
             connectedAt: new Date().toISOString(),
-            initialSyncStatus: 'PENDING',
+            initialSyncStatus: 'SYNCING',
+            activeSyncRunId: syncRunId,
           },
         },
       });
@@ -120,7 +123,8 @@ export class ShipStationConnectionService {
           encryptedCredentials: encryptedEnvelope as unknown as object,
           configuration: {
             connectedAt: new Date().toISOString(),
-            initialSyncStatus: 'PENDING',
+            initialSyncStatus: 'SYNCING',
+            activeSyncRunId: syncRunId,
           },
         },
       });
@@ -143,26 +147,17 @@ export class ShipStationConnectionService {
     });
 
     // 5. Enqueue Durable Initial Sync Job
-    await this.prisma.job.upsert({
-      where: {
-        organizationId_idempotencyKey: {
-          organizationId,
-          idempotencyKey: `shipstation_initial_sync_${integrationId}`,
-        },
-      },
-      update: {
-        status: 'QUEUED',
-        nextRunAt: new Date(),
-        updatedAt: new Date(),
-      },
-      create: {
+    await this.prisma.job.create({
+      data: {
+        id: syncRunId,
         organizationId,
         type: 'SHIPSTATION_SYNC_SHIPMENTS',
         status: 'QUEUED',
         payload: {
           integrationId,
+          syncRunId,
         },
-        idempotencyKey: `shipstation_initial_sync_${integrationId}`,
+        idempotencyKey: `shipstation_sync_run_${integrationId}_${syncRunId}`,
         nextRunAt: new Date(),
       },
     });

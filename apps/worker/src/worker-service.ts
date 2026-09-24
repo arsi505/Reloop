@@ -18,6 +18,7 @@ import {
   SimulatorRecoveryActionAdapter,
 } from '@reloop/connector-simulator';
 import { registerRecoveryStepHandlers } from './recovery-step-handlers';
+import { failCurrentSyncRun, isCurrentSyncRun } from './sync-run-state';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -519,9 +520,14 @@ export class WorkerService {
               const payloadObj = (job.payload as Record<string, any>) || {};
               const integrationId = payloadObj.integrationId || (result as any)?.integrationId;
               const isComplete = (result as any)?.complete === true;
+              const syncRunId = payloadObj.syncRunId || (result as any)?.syncRunId;
+              const currentRun =
+                (result as any)?.currentRun !== false &&
+                (!syncRunId ||
+                  (await isCurrentSyncRun(this.prisma, integrationId, syncRunId)));
 
               // Only emit final sync completion when provider is genuinely exhausted
-              if (isComplete) {
+              if (isComplete && currentRun) {
                 const syncEvent = JSON.stringify({
                   organizationId: job.organizationId,
                   eventType: 'integration.sync_completed',
@@ -536,7 +542,7 @@ export class WorkerService {
 
               // If a continuation job was created, dispatch to Redis Stream immediately
               const continuationJobId = (result as any)?.continuationJobId;
-              if (continuationJobId) {
+              if (continuationJobId && currentRun) {
                 await this.commandRedis.xadd(
                   this.config.jobStreamKey,
                   '*',
@@ -639,17 +645,28 @@ export class WorkerService {
               const provider = job.type === 'SHOPIFY_SYNC_ORDERS' ? 'SHOPIFY' : 'SHIPSTATION';
               const payloadObj = (job.payload as Record<string, any>) || {};
               const integrationId = payloadObj.integrationId;
-              const syncFailedEvent = JSON.stringify({
-                organizationId: job.organizationId,
-                eventType: 'integration.sync_failed',
-                resourceId: integrationId,
-                resourceType: 'INTEGRATION',
-                provider,
-                status: 'FAILED',
-                reason: classified?.code || 'SYNC_FAILED',
-                changedAt: new Date().toISOString(),
-              });
-              await this.commandRedis.publish('reloop:realtime:events', syncFailedEvent);
+              const syncRunId = payloadObj.syncRunId;
+              const currentRun = syncRunId
+                ? await failCurrentSyncRun(
+                    this.prisma,
+                    integrationId,
+                    syncRunId,
+                    classified?.code || 'SYNC_FAILED',
+                  )
+                : true;
+              if (currentRun) {
+                const syncFailedEvent = JSON.stringify({
+                  organizationId: job.organizationId,
+                  eventType: 'integration.sync_failed',
+                  resourceId: integrationId,
+                  resourceType: 'INTEGRATION',
+                  provider,
+                  status: 'FAILED',
+                  reason: classified?.code || 'SYNC_FAILED',
+                  changedAt: new Date().toISOString(),
+                });
+                await this.commandRedis.publish('reloop:realtime:events', syncFailedEvent);
+              }
             } catch {
               // Non-blocking invalidation publish
             }
