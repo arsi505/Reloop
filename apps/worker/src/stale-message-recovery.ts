@@ -1,7 +1,7 @@
 import Redis from 'ioredis';
 import { PrismaClient, JobStatus } from '@prisma/client';
 import { WorkerConfig } from './config';
-import { JobClaimService } from './job-claim';
+import { JobClaimService, ClaimedJob } from './job-claim';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -16,14 +16,7 @@ export interface StaleMessageRecoveryOptions {
   releaseSlot?: () => void;
   isDraining?: () => boolean;
   onExecuteClaimedJob: (
-    job: {
-      id: string;
-      organizationId: string;
-      type: string;
-      payload: unknown;
-      attemptCount: number;
-      maxAttempts: number;
-    },
+    job: ClaimedJob,
     attemptId: string,
     attemptNumber: number,
     msgId: string,
@@ -173,6 +166,8 @@ export class StaleMessageRecoveryService {
           select: {
             id: true,
             organizationId: true,
+            workflowId: true,
+            workflowStepId: true,
             type: true,
             status: true,
             payload: true,

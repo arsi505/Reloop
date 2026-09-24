@@ -3,7 +3,7 @@ import Redis from 'ioredis';
 import { PrismaClient, Prisma, WorkerStatus } from '@prisma/client';
 import { WorkerConfig } from './config';
 import { JobExecutorRegistry } from './executor';
-import { JobClaimService } from './job-claim';
+import { JobClaimService, ClaimedJob } from './job-claim';
 import { LeaseManager } from './lease-manager';
 import { WorkerHeartbeat } from './heartbeat';
 import { RetryPolicy } from './retry-policy';
@@ -399,16 +399,7 @@ export class WorkerService {
    * 7. Finally: stops lease renewal, removes from activeJobs, syncs heartbeat
    */
   async executeClaimedJob(
-    job: {
-      id: string;
-      organizationId: string;
-      workflowId?: string | null;
-      workflowStepId?: string | null;
-      type: string;
-      payload: unknown;
-      attemptCount: number;
-      maxAttempts: number;
-    },
+    job: ClaimedJob,
     attemptId: string,
     attemptNumber: number,
     msgId: string,

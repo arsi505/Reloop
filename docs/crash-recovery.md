@@ -85,7 +85,7 @@ In a multi-worker cluster, multiple workers may run recovery scans concurrently 
 
 ### Recovering Expired `CLAIMED` Jobs
 ```sql
-SELECT id, organization_id, type, payload, attempt_count, max_attempts
+SELECT id, organization_id, workflow_id, workflow_step_id, type, payload, attempt_count, max_attempts
 FROM jobs
 WHERE id = $jobId::uuid
   AND status = 'CLAIMED'::"JobStatus"
@@ -95,6 +95,7 @@ FOR UPDATE;
 ```
 - Exactly **one** worker acquires the row lock while `status = 'CLAIMED'` and `lease_expires_at <= NOW()`.
 - The winning worker increments `attemptCount`, extends `lease_expires_at`, marks the previous `JobAttempt` `ABANDONED`, and creates a new `JobAttempt` #2.
+- The `UPDATE ... RETURNING` clause preserves authoritative relational columns (`workflow_id`, `workflow_step_id`), ensuring recovered workflow step jobs resume cleanly without failing the `WorkflowStepExecutor` validation gate.
 - All competing workers block. Once the winner commits, competing workers evaluate the locked row, see `lease_expires_at > NOW()`, receive 0 rows, and safely abort without side effects.
 
 ### Recovering Expired `RUNNING` Jobs

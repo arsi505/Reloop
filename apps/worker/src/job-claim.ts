@@ -3,18 +3,20 @@ import { JobExecutionError, classifyJobError, sanitizeErrorMessage } from './err
 
 export { sanitizeErrorMessage };
 
+export interface ClaimedJob {
+  id: string;
+  organizationId: string;
+  workflowId: string | null;
+  workflowStepId: string | null;
+  type: string;
+  payload: unknown;
+  attemptCount: number;
+  maxAttempts: number;
+}
+
 export interface ClaimResult {
   claimed: boolean;
-  job?: {
-    id: string;
-    organizationId: string;
-    workflowId?: string | null;
-    workflowStepId?: string | null;
-    type: string;
-    payload: unknown;
-    attemptCount: number;
-    maxAttempts: number;
-  };
+  job?: ClaimedJob;
   attemptId?: string;
   attemptNumber?: number;
 }
@@ -23,16 +25,7 @@ export interface RecoverClaimedResult {
   recovered: boolean;
   execute: boolean;
   deadLettered?: boolean;
-  job?: {
-    id: string;
-    organizationId: string;
-    workflowId?: string | null;
-    workflowStepId?: string | null;
-    type: string;
-    payload: unknown;
-    attemptCount: number;
-    maxAttempts: number;
-  };
+  job?: ClaimedJob;
   attemptId?: string;
   attemptNumber?: number;
 }
@@ -58,18 +51,7 @@ export class JobClaimService {
   ): Promise<ClaimResult> {
     return await this.prisma.$transaction(async (tx) => {
       // 1. Conditional Atomic Claim
-      const claimedRows = await tx.$queryRaw<
-        Array<{
-          id: string;
-          organizationId: string;
-          workflowId: string | null;
-          workflowStepId: string | null;
-          type: string;
-          payload: unknown;
-          attemptCount: number;
-          maxAttempts: number;
-        }>
-      >`
+      const claimedRows = await tx.$queryRaw<Array<ClaimedJob>>`
         UPDATE jobs
         SET
           status = 'CLAIMED'::"JobStatus",
@@ -456,18 +438,7 @@ export class JobClaimService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         // 1. Lock and inspect eligible expired CLAIMED job
-        const lockedRows = await tx.$queryRaw<
-          Array<{
-            id: string;
-            organizationId: string;
-            workflowId: string | null;
-            workflowStepId: string | null;
-            type: string;
-            payload: unknown;
-            attemptCount: number;
-            maxAttempts: number;
-          }>
-        >`
+        const lockedRows = await tx.$queryRaw<Array<ClaimedJob>>`
           SELECT
             id,
             organization_id as "organizationId",
@@ -513,16 +484,7 @@ export class JobClaimService {
         if (currentJob.attemptCount < currentJob.maxAttempts) {
           const newAttemptCount = currentJob.attemptCount + 1;
 
-          const updatedRows = await tx.$queryRaw<
-            Array<{
-              id: string;
-              organizationId: string;
-              type: string;
-              payload: unknown;
-              attemptCount: number;
-              maxAttempts: number;
-            }>
-          >`
+          const updatedRows = await tx.$queryRaw<Array<ClaimedJob>>`
             UPDATE jobs
             SET
               status = 'CLAIMED'::"JobStatus",
@@ -537,6 +499,8 @@ export class JobClaimService {
             RETURNING
               id,
               organization_id as "organizationId",
+              workflow_id as "workflowId",
+              workflow_step_id as "workflowStepId",
               type,
               payload,
               attempt_count as "attemptCount",
