@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import { Prisma, Integration } from '@reloop/database';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   normalizeAndValidateShopDomain,
@@ -114,9 +115,12 @@ export class ShopifyOAuthService {
       where: { shopDomain: normalizedShop },
     });
 
-    if (existing && existing.organizationId !== organizationId && existing.status !== 'DISCONNECTED') {
+    if (existing && existing.organizationId !== organizationId) {
+      this.logger.warn(
+        `Rejected initiateConnect: shop ${normalizedShop} is already associated with another organization`,
+      );
       throw new ConflictException(
-        `Shopify store "${normalizedShop}" is already connected to another organization.`,
+        'This Shopify store is already associated with another organization.',
       );
     }
 
@@ -316,38 +320,95 @@ export class ShopifyOAuthService {
 
     const encryptedEnvelope = encryptCredentials(credentialsToStore, this.encryptionKey);
 
-    // 8. Upsert Integration
-    const integration = await this.prisma.integration.upsert({
+    // 8. Durable Integration Storage with Tenant Ownership Immutability
+    const existing = await this.prisma.integration.findUnique({
       where: { shopDomain: normalizedShop },
-      update: {
-        organizationId,
-        status: 'CONNECTED',
-        name: shopIdentity.name || normalizedShop,
-        mode: 'OBSERVE',
-        encryptedCredentials: encryptedEnvelope as any,
-        configuration: {
-          shopId: shopIdentity.id,
-          scopes: grantedScopes,
-          connectedAt: new Date().toISOString(),
-          initialSyncStatus: 'PENDING',
-        },
-      },
-      create: {
-        organizationId,
-        provider: 'SHOPIFY',
-        name: shopIdentity.name || normalizedShop,
-        status: 'CONNECTED',
-        mode: 'OBSERVE',
-        shopDomain: normalizedShop,
-        encryptedCredentials: encryptedEnvelope as any,
-        configuration: {
-          shopId: shopIdentity.id,
-          scopes: grantedScopes,
-          connectedAt: new Date().toISOString(),
-          initialSyncStatus: 'PENDING',
-        },
-      },
     });
+
+    let integration: Integration;
+
+    if (existing) {
+      if (existing.organizationId !== organizationId) {
+        this.logger.warn(
+          `Rejected callback: shop ${normalizedShop} is already associated with another organization`,
+        );
+        throw new ConflictException(
+          'This Shopify store is already associated with another organization.',
+        );
+      }
+
+      // Reconnect/update existing integration for the same organization.
+      // NOTE: organizationId is never updated, guaranteeing tenant ownership immutability.
+      integration = await this.prisma.integration.update({
+        where: { id: existing.id },
+        data: {
+          status: 'CONNECTED',
+          name: shopIdentity.name || normalizedShop,
+          mode: 'OBSERVE',
+          encryptedCredentials: encryptedEnvelope as any,
+          configuration: {
+            shopId: shopIdentity.id,
+            scopes: grantedScopes,
+            connectedAt: new Date().toISOString(),
+            initialSyncStatus: 'PENDING',
+          },
+        },
+      });
+    } else {
+      try {
+        integration = await this.prisma.integration.create({
+          data: {
+            organizationId,
+            provider: 'SHOPIFY',
+            name: shopIdentity.name || normalizedShop,
+            status: 'CONNECTED',
+            mode: 'OBSERVE',
+            shopDomain: normalizedShop,
+            encryptedCredentials: encryptedEnvelope as any,
+            configuration: {
+              shopId: shopIdentity.id,
+              scopes: grantedScopes,
+              connectedAt: new Date().toISOString(),
+              initialSyncStatus: 'PENDING',
+            },
+          },
+        });
+      } catch (err: unknown) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          // Concurrent race: another request inserted an integration with this shopDomain
+          const concurrent = await this.prisma.integration.findUnique({
+            where: { shopDomain: normalizedShop },
+          });
+
+          if (concurrent && concurrent.organizationId === organizationId) {
+            integration = await this.prisma.integration.update({
+              where: { id: concurrent.id },
+              data: {
+                status: 'CONNECTED',
+                name: shopIdentity.name || normalizedShop,
+                mode: 'OBSERVE',
+                encryptedCredentials: encryptedEnvelope as any,
+                configuration: {
+                  shopId: shopIdentity.id,
+                  scopes: grantedScopes,
+                  connectedAt: new Date().toISOString(),
+                  initialSyncStatus: 'PENDING',
+                },
+              },
+            });
+          } else {
+            this.logger.warn(
+              `Rejected concurrent callback: shop ${normalizedShop} was claimed by another organization`,
+            );
+            throw new ConflictException(
+              'This Shopify store is already associated with another organization.',
+            );
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
 
     // 9. Record Audit Log
     await this.prisma.auditLog.create({

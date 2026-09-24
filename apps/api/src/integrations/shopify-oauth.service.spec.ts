@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { Prisma } from '@reloop/database';
 import { ShopifyOAuthService } from './shopify-oauth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
@@ -18,6 +19,8 @@ describe('ShopifyOAuthService', () => {
     prisma = {
       integration: {
         findUnique: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
         upsert: jest.fn(),
       },
       oAuthState: {
@@ -129,6 +132,30 @@ describe('ShopifyOAuthService', () => {
         ConflictException,
       );
     });
+
+    it('rejects if shop belongs to another organization even when DISCONNECTED', async () => {
+      prisma.integration.findUnique.mockResolvedValue({
+        id: 'int-existing-disconnected',
+        organizationId: 'other-org',
+        status: 'DISCONNECTED',
+      });
+
+      await expect(service.initiateConnect('org-123', 'user-456', 'store.myshopify.com')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('allows reconnect if shop is DISCONNECTED but belongs to the same organization', async () => {
+      prisma.integration.findUnique.mockResolvedValue({
+        id: 'int-existing-disconnected',
+        organizationId: 'org-123',
+        status: 'DISCONNECTED',
+      });
+      prisma.oAuthState.create.mockResolvedValue({});
+
+      const result = await service.initiateConnect('org-123', 'user-456', 'store.myshopify.com');
+      expect(result.authorizationUrl).toBeDefined();
+    });
   });
 
   describe('handleCallback', () => {
@@ -218,9 +245,11 @@ describe('ShopifyOAuthService', () => {
           }),
         } as any);
 
-      prisma.integration.upsert.mockResolvedValue({
+      prisma.integration.findUnique.mockResolvedValue(null);
+      prisma.integration.create.mockResolvedValue({
         id: 'integration-created-id',
         shopDomain: 'store.myshopify.com',
+        organizationId: 'org-100',
       });
 
       const beforeExchange = Date.now();
@@ -244,9 +273,10 @@ describe('ShopifyOAuthService', () => {
       expect(requestBody.expiring).toBe('1');
 
       // 2. Verify credentials were encrypted
-      expect(prisma.integration.upsert).toHaveBeenCalledWith(
+      expect(prisma.integration.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          create: expect.objectContaining({
+          data: expect.objectContaining({
+            organizationId: 'org-100',
             encryptedCredentials: expect.objectContaining({
               algorithm: 'aes-256-gcm',
               ciphertext: expect.any(String),
@@ -259,8 +289,8 @@ describe('ShopifyOAuthService', () => {
       );
 
       // 3. Verify decrypted content contains full lifecycle metadata computed accurately
-      const upsertCall = prisma.integration.upsert.mock.calls[0][0];
-      const envelope = upsertCall.create.encryptedCredentials;
+      const createCall = prisma.integration.create.mock.calls[0][0];
+      const envelope = createCall.data.encryptedCredentials;
       const decrypted = decryptCredentials<any>(envelope, mockMasterKey);
       expect(decrypted.accessToken).toBe('shpat_secret_access_token_123');
       expect(decrypted.refreshToken).toBe('shprf_secret_refresh_token_456');
@@ -338,6 +368,267 @@ describe('ShopifyOAuthService', () => {
           mockFetch,
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects callback if store is already associated with another organization', async () => {
+      const message = 'code=code-1&shop=store.myshopify.com&state=state-1';
+      const hmac = crypto.createHmac('sha256', mockClientSecret).update(message).digest('hex');
+
+      prisma.oAuthState.findUnique.mockResolvedValue({
+        state: 'state-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60000),
+        shopDomain: 'store.myshopify.com',
+        organizationId: 'org-tenant-b',
+        userId: 'user-200',
+      });
+      prisma.oAuthState.updateMany.mockResolvedValue({ count: 1 });
+
+      const mockFetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'shpat_token_b',
+            scope: 'read_orders',
+            expires_in: 86400,
+          }),
+        } as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              shop: {
+                id: 'gid://shopify/Shop/999',
+                myshopifyDomain: 'store.myshopify.com',
+                name: 'Store',
+              },
+            },
+          }),
+        } as any);
+
+      // Existing integration belongs to org-tenant-a
+      prisma.integration.findUnique.mockResolvedValue({
+        id: 'int-existing-tenant-a',
+        organizationId: 'org-tenant-a',
+        shopDomain: 'store.myshopify.com',
+        status: 'CONNECTED',
+      });
+
+      await expect(
+        service.handleCallback(
+          { code: 'code-1', shop: 'store.myshopify.com', state: 'state-1', hmac },
+          mockFetch,
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.integration.update).not.toHaveBeenCalled();
+      expect(prisma.integration.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects callback if store belongs to another organization even when DISCONNECTED', async () => {
+      const message = 'code=code-1&shop=store.myshopify.com&state=state-1';
+      const hmac = crypto.createHmac('sha256', mockClientSecret).update(message).digest('hex');
+
+      prisma.oAuthState.findUnique.mockResolvedValue({
+        state: 'state-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60000),
+        shopDomain: 'store.myshopify.com',
+        organizationId: 'org-tenant-b',
+        userId: 'user-200',
+      });
+      prisma.oAuthState.updateMany.mockResolvedValue({ count: 1 });
+
+      const mockFetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'shpat_token_b',
+            scope: 'read_orders',
+            expires_in: 86400,
+          }),
+        } as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              shop: {
+                id: 'gid://shopify/Shop/999',
+                myshopifyDomain: 'store.myshopify.com',
+                name: 'Store',
+              },
+            },
+          }),
+        } as any);
+
+      // Existing integration belongs to org-tenant-a and is DISCONNECTED
+      prisma.integration.findUnique.mockResolvedValue({
+        id: 'int-existing-tenant-a',
+        organizationId: 'org-tenant-a',
+        shopDomain: 'store.myshopify.com',
+        status: 'DISCONNECTED',
+      });
+
+      await expect(
+        service.handleCallback(
+          { code: 'code-1', shop: 'store.myshopify.com', state: 'state-1', hmac },
+          mockFetch,
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.integration.update).not.toHaveBeenCalled();
+      expect(prisma.integration.create).not.toHaveBeenCalled();
+    });
+
+    it('reconnects same-tenant store without modifying organizationId', async () => {
+      const message = 'code=code-reconnect&shop=store.myshopify.com&state=state-reconnect';
+      const hmac = crypto.createHmac('sha256', mockClientSecret).update(message).digest('hex');
+
+      prisma.oAuthState.findUnique.mockResolvedValue({
+        state: 'state-reconnect',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60000),
+        shopDomain: 'store.myshopify.com',
+        organizationId: 'org-100',
+        userId: 'user-200',
+      });
+      prisma.oAuthState.updateMany.mockResolvedValue({ count: 1 });
+
+      const mockFetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'shpat_new_token',
+            scope: 'read_orders',
+            expires_in: 86400,
+          }),
+        } as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              shop: {
+                id: 'gid://shopify/Shop/999',
+                myshopifyDomain: 'store.myshopify.com',
+                name: 'Store Reconnected',
+              },
+            },
+          }),
+        } as any);
+
+      // Existing integration belongs to the same org-100
+      prisma.integration.findUnique.mockResolvedValue({
+        id: 'int-existing-org-100',
+        organizationId: 'org-100',
+        shopDomain: 'store.myshopify.com',
+        status: 'DISCONNECTED',
+      });
+
+      prisma.integration.update.mockResolvedValue({
+        id: 'int-existing-org-100',
+        organizationId: 'org-100',
+        shopDomain: 'store.myshopify.com',
+        status: 'CONNECTED',
+      });
+
+      const result = await service.handleCallback(
+        { code: 'code-reconnect', shop: 'store.myshopify.com', state: 'state-reconnect', hmac },
+        mockFetch,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.integrationId).toBe('int-existing-org-100');
+
+      // Verify update was called and did NOT pass organizationId
+      expect(prisma.integration.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'int-existing-org-100' },
+          data: expect.not.objectContaining({
+            organizationId: expect.anything(),
+          }),
+        }),
+      );
+      expect(prisma.integration.create).not.toHaveBeenCalled();
+    });
+
+    it('handles concurrent race condition: P2002 on create updates if same organization, throws if different', async () => {
+      const message = 'code=code-race&shop=store.myshopify.com&state=state-race';
+      const hmac = crypto.createHmac('sha256', mockClientSecret).update(message).digest('hex');
+
+      prisma.oAuthState.findUnique.mockResolvedValue({
+        state: 'state-race',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60000),
+        shopDomain: 'store.myshopify.com',
+        organizationId: 'org-100',
+        userId: 'user-200',
+      });
+      prisma.oAuthState.updateMany.mockResolvedValue({ count: 1 });
+
+      const mockFetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: 'shpat_race',
+            scope: 'read_orders',
+            expires_in: 86400,
+          }),
+        } as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              shop: {
+                id: 'gid://shopify/Shop/999',
+                myshopifyDomain: 'store.myshopify.com',
+                name: 'Race Store',
+              },
+            },
+          }),
+        } as any);
+
+      // findUnique returns null initially
+      prisma.integration.findUnique
+        .mockResolvedValueOnce(null)
+        // second findUnique (in catch block) returns racer owned by org-100
+        .mockResolvedValueOnce({
+          id: 'int-racer',
+          organizationId: 'org-100',
+          shopDomain: 'store.myshopify.com',
+        });
+
+      // create throws P2002 unique constraint error
+      const p2002Error = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`shop_domain`)',
+        { code: 'P2002', clientVersion: '5.x' },
+      );
+      prisma.integration.create.mockRejectedValueOnce(p2002Error);
+      prisma.integration.update.mockResolvedValue({
+        id: 'int-racer',
+        organizationId: 'org-100',
+        shopDomain: 'store.myshopify.com',
+      });
+
+      const result = await service.handleCallback(
+        { code: 'code-race', shop: 'store.myshopify.com', state: 'state-race', hmac },
+        mockFetch,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.integrationId).toBe('int-racer');
+      expect(prisma.integration.update).toHaveBeenCalled();
     });
   });
 });

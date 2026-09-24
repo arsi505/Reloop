@@ -55,7 +55,7 @@ The Reloop Shopify Integration provides a hardened, tenant-isolated, and strictl
    - Normalizes schemes/slashes: `HTTPS://STORE.MYSHOPIFY.COM/` -> `store.myshopify.com`.
    - Rejects arbitrary custom merchant domains (`example.com`, `shop.example.com`) without guessing/mapping.
    - Rejects SSRF vectors: loopback (127.0.0.1), private CIDRs (RFC 1918), link-local metadata (169.254.169.254), ports, paths, userinfo (`@`).
-   - Enforces cross-tenant uniqueness: shop domains cannot be linked to multiple organizations simultaneously.
+   - Enforces cross-tenant store connection uniqueness and tenant ownership immutability: shop domains cannot be linked to multiple organizations. If an integration already exists for another organization (regardless of whether status is CONNECTED, DISCONNECTED, DEGRADED, or ERROR), initiation is rejected with HTTP 409 Conflict ('This Shopify store is already associated with another organization.').
    - Generates cryptographically secure 32-byte state parameter (`crypto.randomBytes(32).toString('hex')`).
    - Persists state in `OAuthState` with 10-minute expiry and links to initiating user and organization.
    - Returns authorization URL directed to Shopify Admin OAuth:
@@ -70,7 +70,7 @@ The Reloop Shopify Integration provides a hardened, tenant-isolated, and strictl
    - Invokes GraphQL Admin API `query { shop { id name myshopifyDomain primaryDomain { url } } }` to verify identity and match against expected domain.
    - Computes lifecycle timestamps from response metadata (`expires_in` -> `accessTokenExpiresAt`, `refresh_token_expires_in` -> `refreshTokenExpiresAt`).
    - Encrypts token envelope using AES-256-GCM before writing to PostgreSQL.
-   - Upserts `Integration` record in status `CONNECTED`, mode `OBSERVE`, and `configuration.initialSyncStatus: 'PENDING'`.
+   - Enforces immutable tenant ownership: if an integration for the shop domain already exists under the same organization, it updates credentials and status to `CONNECTED` without modifying `organizationId`; if an integration exists under another organization, callback rejects with HTTP 409 Conflict; concurrent creation races are handled safely via database unique constraint (`shopDomain`).
    - Enqueues a durable `Job` (`type: 'SHOPIFY_SYNC_ORDERS'`, `status: 'QUEUED'`).
    - Records an immutable `AuditLog` entry for `SHOPIFY_INTEGRATION_CONNECTED`.
    - Returns HTTP 200 immediately without in-memory fire-and-forget promises.
