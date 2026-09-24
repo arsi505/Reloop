@@ -185,7 +185,13 @@ The `ShipStationSyncJobExecutor` executes within the worker process:
 8. **Durable Watermark Checkpoint**:
    - Checkpoint watermark (`lastSuccessfulSyncWatermark`) is persisted in PostgreSQL `Integration.configuration`.
    - Advances **only** after successful durable processing of the window. If any step fails, the watermark is not advanced, allowing safe replay on restart.
-9. **Error Classification & Rate Limiting**:
+9. **Bounded Work Units & Truthful Completion Invariant**:
+   - Work units are bounded (`maxShipments`, default 250). Reaching `maxShipments` represents bounded chunk execution, **NEVER** completion of provider sync. Unconditional completion expressions (such as `|| true`) are strictly forbidden.
+   - `complete = true` is reported **ONLY IF** provider reports no further pages (`page >= pages`).
+   - When more provider pages remain, the executor creates a durable continuation `Job` in PostgreSQL (`shipstation_sync_continuation_${integration.id}_page_${nextPage}`).
+   - Final completion (`integration.sync_completed` and `initialSyncStatus = 'COMPLETED'`) is emitted strictly on provider exhaustion.
+   - **Periodic Sync Limitation**: Triggered syncs run durably to provider exhaustion via continuation jobs; periodic background cron re-sync is not yet implemented in V1 and remains an intentional current limitation.
+10. **Error Classification & Rate Limiting**:
    - HTTP 429: Re-throws `JobExecutionError` with `RATE_LIMITED`, respects `Retry-After` header.
    - HTTP 5xx: Re-throws `JobExecutionError` with `TRANSIENT`, enabling automatic exponential backoff.
    - HTTP 401: Marks integration `DEGRADED`, writes `SHIPSTATION_INTEGRATION_REAUTH_REQUIRED` audit log, throws non-retryable error.

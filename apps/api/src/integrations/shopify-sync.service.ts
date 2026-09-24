@@ -13,6 +13,7 @@ export interface SyncResult {
   totalOrdersSynced: number;
   pagesProcessed: number;
   complete: boolean;
+  nextCursor?: string | null;
 }
 
 @Injectable()
@@ -37,7 +38,7 @@ export class ShopifySyncService {
    */
   async syncRecentOrders(
     integrationId: string,
-    options?: { maxOrders?: number; fetchFn?: typeof fetch },
+    options?: { maxOrders?: number; fetchFn?: typeof fetch; cursor?: string },
   ): Promise<SyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -69,7 +70,7 @@ export class ShopifySyncService {
     });
 
     let hasNextPage = true;
-    let endCursor: string | null = null;
+    let endCursor: string | null = options?.cursor || null;
     let totalSynced = 0;
     let pagesProcessed = 0;
     const seenCursors = new Set<string>();
@@ -86,6 +87,7 @@ export class ShopifySyncService {
       });
 
       if (!page.orders || page.orders.length === 0) {
+        hasNextPage = false;
         break;
       }
 
@@ -196,7 +198,8 @@ export class ShopifySyncService {
       shopDomain,
       totalOrdersSynced: totalSynced,
       pagesProcessed,
-      complete: !hasNextPage || totalSynced >= maxOrders,
+      complete: !hasNextPage,
+      nextCursor: hasNextPage ? endCursor : undefined,
     };
   }
 
@@ -231,7 +234,10 @@ export class ShopifySyncService {
     });
 
     try {
-      const syncResult = await this.syncRecentOrders(integrationId, options);
+      const syncResult = await this.syncRecentOrders(integrationId, {
+        ...options,
+        cursor: payload.cursor,
+      });
 
       // Update Integration configuration
       const integration = await this.prisma.integration.findUnique({
@@ -245,9 +251,10 @@ export class ShopifySyncService {
           data: {
             configuration: {
               ...currentConfig,
-              initialSyncStatus: 'COMPLETED',
+              initialSyncStatus: syncResult.complete ? 'COMPLETED' : 'SYNCING',
               lastSyncAt: new Date().toISOString(),
-              lastSyncOrdersCount: syncResult.totalOrdersSynced,
+              lastSyncOrdersCount: (currentConfig.lastSyncOrdersCount || 0) + syncResult.totalOrdersSynced,
+              continuationCursor: syncResult.complete ? null : (syncResult.nextCursor ?? null),
             },
           },
         });

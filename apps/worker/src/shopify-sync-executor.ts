@@ -26,6 +26,8 @@ export interface ShopifySyncJobResult {
   totalOrdersSynced: number;
   pagesProcessed: number;
   complete: boolean;
+  nextCursor?: string | null;
+  continuationJobId?: string | null;
 }
 
 export class ShopifySyncJobExecutor {
@@ -288,7 +290,7 @@ export class ShopifySyncJobExecutor {
 
     const maxOrders = payload.maxOrders || this.defaultMaxOrders;
     let hasNextPage = true;
-    let endCursor: string | null = null;
+    let endCursor: string | null = (payload.cursor as string) || null;
     let totalSynced = 0;
     let pagesProcessed = 0;
     const seenCursors = new Set<string>();
@@ -304,6 +306,7 @@ export class ShopifySyncJobExecutor {
         });
 
         if (!page.orders || page.orders.length === 0) {
+          hasNextPage = false;
           break;
         }
 
@@ -432,27 +435,73 @@ export class ShopifySyncJobExecutor {
       throw err;
     }
 
-    // 8. Update Integration configuration with initialSyncStatus = COMPLETED
+    // 8. Evaluate truthful completion invariant:
+    // complete = true ONLY IF provider exhaustion is positively established (hasNextPage === false).
+    // Reaching maxOrders cap represents bounded work completion, NOT provider sync completion.
+    const isExhausted = !hasNextPage;
+    const complete = isExhausted;
+
+    let continuationJobId: string | null = null;
+    if (!isExhausted && endCursor) {
+      const continuationIdempotencyKey = `shopify_sync_continuation_${integration.id}_${endCursor}`;
+      const continuationJob = await this.prisma.job.upsert({
+        where: {
+          organizationId_idempotencyKey: {
+            organizationId: integration.organizationId,
+            idempotencyKey: continuationIdempotencyKey,
+          },
+        },
+        update: {
+          updatedAt: new Date(),
+        },
+        create: {
+          organizationId: integration.organizationId,
+          type: 'SHOPIFY_SYNC_ORDERS',
+          status: 'QUEUED',
+          priority: 50,
+          payload: {
+            integrationId: integration.id,
+            shopDomain,
+            maxOrders,
+            cursor: endCursor,
+            parentJobId: context.jobId,
+          },
+          idempotencyKey: continuationIdempotencyKey,
+          nextRunAt: new Date(),
+        },
+        select: { id: true },
+      });
+      continuationJobId = continuationJob.id;
+    }
+
+    // 9. Update Integration configuration:
+    // Only mark initialSyncStatus = COMPLETED if provider is genuinely exhausted.
+    // If provider has more records, retain SYNCING and checkpoint continuationCursor.
     const currentConfig = (integration.configuration as Record<string, any>) || {};
     await this.prisma.integration.update({
       where: { id: integrationId },
       data: {
         configuration: {
           ...currentConfig,
-          initialSyncStatus: 'COMPLETED',
+          initialSyncStatus: isExhausted ? 'COMPLETED' : 'SYNCING',
           lastSyncAt: new Date().toISOString(),
-          lastSyncOrdersCount: totalSynced,
+          lastSyncOrdersCount: !payload.cursor
+            ? totalSynced
+            : (currentConfig.lastSyncOrdersCount || 0) + totalSynced,
+          continuationCursor: isExhausted ? null : endCursor,
         },
       },
     });
 
-    // 9. Return safe result metadata (ZERO plaintext tokens, secrets, or raw headers)
+    // 10. Return safe result metadata (ZERO plaintext tokens, secrets, or raw headers)
     return {
       integrationId: integration.id,
       shopDomain,
       totalOrdersSynced: totalSynced,
       pagesProcessed,
-      complete: !hasNextPage || totalSynced >= maxOrders,
+      complete,
+      nextCursor: isExhausted ? undefined : endCursor,
+      continuationJobId,
     };
   }
 }

@@ -27,6 +27,8 @@ export interface ShipStationSyncJobResult {
   pagesProcessed: number;
   complete: boolean;
   watermarkAdvancedTo?: string;
+  nextPage?: number | null;
+  continuationJobId?: string | null;
 }
 
 export class ShipStationSyncJobExecutor {
@@ -143,7 +145,8 @@ export class ShipStationSyncJobExecutor {
     const maxShipments = payload.maxShipments || this.defaultMaxShipments;
     let totalSynced = 0;
     let pagesProcessed = 0;
-    let currentPage = 1;
+    let currentPage = typeof payload.page === 'number' && payload.page >= 1 ? payload.page : 1;
+    let hasMorePages = false;
 
     // Incremental sync windowing with 5-minute safety overlap
     const currentConfig = (integration.configuration as Record<string, any>) || {};
@@ -395,10 +398,13 @@ export class ShipStationSyncJobExecutor {
           totalSynced++;
         }
 
-        if (currentPage >= pageRes.pages) {
+        const totalPages = pageRes.pages || 1;
+        if (currentPage >= totalPages) {
+          hasMorePages = false;
           break;
         }
 
+        hasMorePages = true;
         currentPage++;
       }
     } catch (err: unknown) {
@@ -460,7 +466,47 @@ export class ShipStationSyncJobExecutor {
       throw err;
     }
 
-    // 7. Update Integration configuration with completed sync & advance watermark ONLY ON SUCCESS
+    // 7. Evaluate truthful completion invariant:
+    // complete = true ONLY IF provider reports no further pages.
+    // An unconditional expression like `totalSynced >= maxShipments || true` must NEVER be used.
+    // Reaching maxShipments cap represents bounded work completion, NOT provider sync completion.
+    const complete = !hasMorePages;
+
+    let continuationJobId: string | null = null;
+    if (hasMorePages) {
+      const continuationIdempotencyKey = `shipstation_sync_continuation_${integration.id}_page_${currentPage}`;
+      const continuationJob = await this.prisma.job.upsert({
+        where: {
+          organizationId_idempotencyKey: {
+            organizationId: integration.organizationId,
+            idempotencyKey: continuationIdempotencyKey,
+          },
+        },
+        update: {
+          updatedAt: new Date(),
+        },
+        create: {
+          organizationId: integration.organizationId,
+          type: 'SHIPSTATION_SYNC_SHIPMENTS',
+          status: 'QUEUED',
+          priority: 50,
+          payload: {
+            integrationId: integration.id,
+            page: currentPage,
+            maxShipments,
+            modifiedAtStart,
+            modifiedAtEnd,
+            parentJobId: context.jobId,
+          },
+          idempotencyKey: continuationIdempotencyKey,
+          nextRunAt: new Date(),
+        },
+        select: { id: true },
+      });
+      continuationJobId = continuationJob.id;
+    }
+
+    // 8. Update Integration configuration with completed sync & advance watermark ONLY ON SUCCESS
     const newWatermark = latestModifiedAtObserved
       ? latestModifiedAtObserved.toISOString()
       : modifiedAtEnd;
@@ -470,20 +516,26 @@ export class ShipStationSyncJobExecutor {
       data: {
         configuration: {
           ...currentConfig,
-          initialSyncStatus: 'COMPLETED',
+          initialSyncStatus: complete ? 'COMPLETED' : 'SYNCING',
           lastSyncAt: new Date().toISOString(),
-          lastSyncShipmentsCount: totalSynced,
+          lastSyncShipmentsCount:
+            (!payload.page || payload.page === 1)
+              ? totalSynced
+              : (currentConfig.lastSyncShipmentsCount || 0) + totalSynced,
+          continuationPage: complete ? null : currentPage,
           lastSuccessfulSyncWatermark: newWatermark,
         },
       },
     });
 
-    // 8. Return safe result metadata (ZERO secrets)
+    // 9. Return safe result metadata (ZERO secrets)
     return {
       integrationId: integration.id,
       totalShipmentsSynced: totalSynced,
       pagesProcessed,
-      complete: totalSynced >= maxShipments || true,
+      complete,
+      nextPage: complete ? undefined : currentPage,
+      continuationJobId,
       watermarkAdvancedTo: newWatermark,
     };
   }

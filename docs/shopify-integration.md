@@ -157,8 +157,14 @@ Initial sync follows a durable, decoupled processing pipeline:
 4. **Worker Crash Safety Boundaries**:
    - **Crash while CLAIMED (Before Execution)**: When a worker crashes while the job is `CLAIMED` before execution starts, after lease expiry a surviving recovery worker (`StaleMessageRecoveryService`) safely reclaims the job and executes it to completion with zero duplicate state.
    - **Crash while RUNNING**: When a worker crashes while a read sync is `RUNNING` and lease expires, generic Day 9 safety rules mark the attempt `ABANDONED` and Job `BLOCKED` to prevent ambiguous execution. Day 15 preserves this conservative safety boundary.
-5. **Idempotent Projection**: Orders and fulfillments are upserted idempotently by `(organizationId, externalOrderNumber)` and `(organizationId, integrationId, resourceType, externalId)`. Rereading or replaying sync produces identical logical state without duplicates.
-6. **Read-Only Capability Fence**: `ShopifySyncJobExecutor` uses GraphQL queries only, issues zero mutations, and has zero dependency or access to Day 13 simulator business mutation executor (`SimulatorRecoveryActionAdapter`).
+5. **Bounded Pagination & Truthful Completion Invariant**:
+   - Work units are bounded (`maxOrders`, default 250). Reaching the cap indicates completion of the bounded work chunk, **NOT** completion of the provider sync.
+   - `complete = true` is reported **ONLY IF** provider exhaustion is positively established (`hasNextPage === false`).
+   - If provider records remain beyond the cap (`hasNextPage === true`), the executor enqueues a durable continuation `Job` in PostgreSQL keyed by `shopify_sync_continuation_${integration.id}_${cursor}`.
+   - `integration.sync_completed` and `initialSyncStatus = 'COMPLETED'` are emitted strictly upon genuine provider exhaustion.
+   - **Periodic Sync Limitation**: Reloop currently guarantees that triggered sync operations run to truthful provider exhaustion via durable continuation; automatic background cron/periodic re-sync is not yet implemented in V1 and remains an intentional current limitation.
+6. **Idempotent Projection**: Orders and fulfillments are upserted idempotently by `(organizationId, externalOrderNumber)` and `(organizationId, integrationId, resourceType, externalId)`. Rereading, resuming, or replaying sync produces identical logical state without duplicates.
+7. **Read-Only Capability Fence**: `ShopifySyncJobExecutor` uses GraphQL queries only, issues zero mutations, and has zero dependency or access to Day 13 simulator business mutation executor (`SimulatorRecoveryActionAdapter`).
 
 ---
 

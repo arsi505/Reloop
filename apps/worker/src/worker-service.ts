@@ -513,18 +513,36 @@ export class WorkerService {
               const provider = job.type === 'SHOPIFY_SYNC_ORDERS' ? 'SHOPIFY' : 'SHIPSTATION';
               const payloadObj = (job.payload as Record<string, any>) || {};
               const integrationId = payloadObj.integrationId || (result as any)?.integrationId;
-              const syncEvent = JSON.stringify({
-                organizationId: job.organizationId,
-                eventType: 'integration.sync_completed',
-                resourceId: integrationId,
-                resourceType: 'INTEGRATION',
-                provider,
-                status: 'COMPLETED',
-                changedAt: new Date().toISOString(),
-              });
-              await this.commandRedis.publish('reloop:realtime:events', syncEvent);
+              const isComplete = (result as any)?.complete === true;
+
+              // Only emit final sync completion when provider is genuinely exhausted
+              if (isComplete) {
+                const syncEvent = JSON.stringify({
+                  organizationId: job.organizationId,
+                  eventType: 'integration.sync_completed',
+                  resourceId: integrationId,
+                  resourceType: 'INTEGRATION',
+                  provider,
+                  status: 'COMPLETED',
+                  changedAt: new Date().toISOString(),
+                });
+                await this.commandRedis.publish('reloop:realtime:events', syncEvent);
+              }
+
+              // If a continuation job was created, dispatch to Redis Stream immediately
+              const continuationJobId = (result as any)?.continuationJobId;
+              if (continuationJobId) {
+                await this.commandRedis.xadd(
+                  this.config.jobStreamKey,
+                  '*',
+                  'jobId',
+                  continuationJobId,
+                  'type',
+                  job.type,
+                );
+              }
             } catch {
-              // Non-blocking invalidation publish
+              // Non-blocking invalidation / continuation publish
             }
           }
 
