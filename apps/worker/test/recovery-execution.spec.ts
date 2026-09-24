@@ -158,7 +158,13 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
         templateKey: 'RECOVERY_TRACKING_MISSING_AUTO',
         templateVersion: 1,
         attemptNumber: 1,
-        payload: { orderNumber, caseId: rCase.id, trackingNumber },
+        payload: {
+          orderNumber,
+          caseId: rCase.id,
+          safeToExecute: true,
+          trackingNumber,
+          carrier: 'FedEx',
+        },
         organizationId: orgId,
         workerId: 'worker-1',
       });
@@ -341,7 +347,13 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
         templateKey: 'RECOVERY_TRACKING_MISSING_AUTO',
         templateVersion: 1,
         attemptNumber: 1,
-        payload: { orderNumber, caseId, trackingNumber },
+        payload: {
+          orderNumber,
+          caseId,
+          safeToExecute: true,
+          trackingNumber,
+          carrier: 'FedEx',
+        },
         organizationId: orgId,
         workerId: 'worker-1',
       });
@@ -370,9 +382,9 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
         id: `shp-${orderNumber}`,
         orderNumber,
         fulfillmentStatus: 'UNFULFILLED',
-        customer: { name: 'Customer', email: 'c@example.com' },
-        shippingAddress: { street: '123 St', city: 'City', state: 'CA', postalCode: '90001', country: 'US' },
-        lineItems: [{ sku: 'SKU-1', name: 'Item 1', quantity: 1, price: 10 }],
+        customer: { name: 'Distinct Customer', email: 'distinct@example.com' },
+        shippingAddress: { street: '903 Verified Avenue', city: 'Portland', state: 'OR', postalCode: '97205', country: 'US' },
+        lineItems: [{ sku: 'SKU-VERIFIED-77', name: 'Verified Item', quantity: 7, price: 19.5 }],
         paymentStatus: 'PAID',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -400,11 +412,26 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
         templateKey: 'RECOVERY_ORDER_MISSING_3PL',
         templateVersion: 1,
         attemptNumber: 1,
-        payload: { orderNumber, caseId },
+        payload: { orderNumber, caseId, ...checkRes.output },
         organizationId: orgId,
         workerId: 'worker-1',
       });
       expect(execRes.output?.executed).toBe(true);
+      const createdState = await actionAdapter.fetchAuthoritativeOrderState(orderNumber);
+      expect(createdState.warehouse?.customer).toEqual({
+        name: 'Distinct Customer',
+        email: 'distinct@example.com',
+      });
+      expect(createdState.warehouse?.shippingAddress).toEqual({
+        street: '903 Verified Avenue',
+        city: 'Portland',
+        state: 'OR',
+        postalCode: '97205',
+        country: 'US',
+      });
+      expect(createdState.warehouse?.lineItems).toEqual([
+        { sku: 'SKU-VERIFIED-77', name: 'Verified Item', quantity: 7, price: 19.5 },
+      ]);
 
       // VERIFY
       const verifyRes = await stepRegistry.execute('RECOVERY_VERIFY_ORDER_3PL', {
@@ -423,6 +450,28 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
 
       const opKey = buildLogicalOperationKey(orgId, 'generic-3pl', 'CREATE_ORDER', caseId);
       expect(actionAdapter.getMutationCount(opKey)).toBe(1);
+    });
+
+    it('blocks EXECUTE when verified CHECK business context is missing', async () => {
+      const orderNumber = `ORD-MISSING-CONTEXT-${runId}`;
+      const caseId = `case-missing-context-${runId}`;
+
+      await expect(
+        stepRegistry.execute('RECOVERY_EXECUTE_ORDER_3PL', {
+          workflowId: 'wf-missing-context',
+          workflowStepId: 'step-execute',
+          stepKey: 'EXECUTE',
+          templateKey: 'RECOVERY_ORDER_MISSING_3PL',
+          templateVersion: 1,
+          attemptNumber: 1,
+          payload: { orderNumber, caseId, safeToExecute: true },
+          organizationId: orgId,
+          workerId: 'worker-1',
+        }),
+      ).rejects.toMatchObject({ code: 'MISSING_VERIFIED_CONTEXT', retryable: false });
+
+      const opKey = buildLogicalOperationKey(orgId, 'generic-3pl', 'CREATE_ORDER', caseId);
+      expect(actionAdapter.getMutationCount(opKey)).toBe(0);
     });
 
     it('shipped at 3PL / unfulfilled in Shopify: marks fulfilled and verifies state convergence', async () => {
@@ -485,7 +534,7 @@ describe('Day 13: Verified Recovery Execution & Safety Fences', () => {
         templateKey: 'RECOVERY_SHIPPED_UNFULFILLED',
         templateVersion: 1,
         attemptNumber: 1,
-        payload: { orderNumber, caseId, trackingNumber: 'TRK-SHP-123' },
+        payload: { orderNumber, caseId, ...checkRes.output },
         organizationId: orgId,
         workerId: 'worker-1',
       });

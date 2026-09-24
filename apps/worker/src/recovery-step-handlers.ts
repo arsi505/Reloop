@@ -56,6 +56,83 @@ function requireCaseId(payload: Record<string, unknown>, handlerKey: string): st
   return caseId;
 }
 
+function missingVerifiedContext(handlerKey: string, field: string): never {
+  throw new JobExecutionError({
+    category: JobErrorCategory.BUSINESS_ERROR,
+    code: 'MISSING_VERIFIED_CONTEXT',
+    message: `Verified CHECK context field "${field}" is required for handler "${handlerKey}".`,
+    retryable: false,
+  });
+}
+
+function requireVerifiedString(
+  payload: Record<string, unknown>,
+  field: string,
+  handlerKey: string,
+): string {
+  const value = payload[field];
+  if (typeof value !== 'string' || value.trim() === '') {
+    return missingVerifiedContext(handlerKey, field);
+  }
+  return value;
+}
+
+function requireSafeToExecute(payload: Record<string, unknown>, handlerKey: string): void {
+  if (payload.safeToExecute !== true) {
+    missingVerifiedContext(handlerKey, 'safeToExecute');
+  }
+}
+
+function requireVerifiedRecord(
+  payload: Record<string, unknown>,
+  field: string,
+  handlerKey: string,
+  requiredStringFields: string[],
+): Record<string, unknown> {
+  const value = payload[field];
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    requiredStringFields.some(
+      (requiredField) =>
+        typeof (value as Record<string, unknown>)[requiredField] !== 'string' ||
+        ((value as Record<string, unknown>)[requiredField] as string).trim() === '',
+    )
+  ) {
+    return missingVerifiedContext(handlerKey, field);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireVerifiedLineItems(
+  payload: Record<string, unknown>,
+  handlerKey: string,
+): Array<{ sku: string; name: string; quantity: number; price: number }> {
+  const lineItems = payload.lineItems;
+  if (
+    !Array.isArray(lineItems) ||
+    lineItems.length === 0 ||
+    lineItems.some(
+      (item) =>
+        item === null ||
+        typeof item !== 'object' ||
+        typeof item.sku !== 'string' ||
+        item.sku.trim() === '' ||
+        typeof item.name !== 'string' ||
+        item.name.trim() === '' ||
+        typeof item.quantity !== 'number' ||
+        !Number.isFinite(item.quantity) ||
+        item.quantity <= 0 ||
+        typeof item.price !== 'number' ||
+        !Number.isFinite(item.price),
+    )
+  ) {
+    return missingVerifiedContext(handlerKey, 'lineItems');
+  }
+  return lineItems as Array<{ sku: string; name: string; quantity: number; price: number }>;
+}
+
 /**
  * Registers canonical Day 13 recovery step handlers with the worker handler registry.
  */
@@ -95,7 +172,7 @@ export function registerRecoveryStepHandlers(
           noActionNeeded: true,
           resolvedClean: true,
           trackingNumber: shp.trackingNumber,
-          carrier: shp.carrier || wh.carrier || 'FedEx',
+          carrier: shp.carrier || wh.carrier,
           orderNumber,
           safetyFingerprint: 'HEALTHY_AGREEMENT',
         },
@@ -112,17 +189,17 @@ export function registerRecoveryStepHandlers(
       });
     }
 
-    if (!wh || !wh.trackingNumber) {
+    if (!wh || !wh.trackingNumber || !wh.carrier) {
       throw new JobExecutionError({
         category: JobErrorCategory.BUSINESS_ERROR,
-        code: 'WAREHOUSE_TRACKING_UNAVAILABLE',
-        message: `Warehouse tracking not yet available for order ${orderNumber}`,
-        retryable: true,
+        code: 'WAREHOUSE_SHIPMENT_CONTEXT_UNAVAILABLE',
+        message: `Warehouse tracking and carrier are required for order ${orderNumber}`,
+        retryable: false,
       });
     }
 
     const trackingNumber = wh.trackingNumber;
-    const carrier = wh.carrier || 'FedEx';
+    const carrier = wh.carrier;
     const safetyFingerprint = computeSafetyFingerprint({
       orderNumber,
       shpTracking: shp.trackingNumber || null,
@@ -201,9 +278,13 @@ export function registerRecoveryStepHandlers(
       };
     }
 
-    const trackingNumber =
-      (payload.trackingNumber as string) || currentState.warehouse?.trackingNumber || 'TRK-DEFAULT';
-    const carrier = (payload.carrier as string) || currentState.warehouse?.carrier || 'FedEx';
+    requireSafeToExecute(payload, 'RECOVERY_EXECUTE_TRACKING');
+    const trackingNumber = requireVerifiedString(
+      payload,
+      'trackingNumber',
+      'RECOVERY_EXECUTE_TRACKING',
+    );
+    const carrier = requireVerifiedString(payload, 'carrier', 'RECOVERY_EXECUTE_TRACKING');
 
     // Execute mutation
     const result = await actionExecutor.updateShopifyTracking({
@@ -347,6 +428,9 @@ export function registerRecoveryStepHandlers(
       output: {
         safeToExecute: true,
         orderNumber,
+        customer: state.shopify.customer,
+        shippingAddress: state.shopify.shippingAddress,
+        lineItems: state.shopify.lineItems,
         safetyFingerprint,
       },
     };
@@ -356,12 +440,35 @@ export function registerRecoveryStepHandlers(
     const payload = (context.payload ?? {}) as Record<string, unknown>;
     const orderNumber = requireOrderNumber(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
     const recoveryCaseId = requireCaseId(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
+    requireSafeToExecute(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
+    const customer = requireVerifiedRecord(
+      payload,
+      'customer',
+      'RECOVERY_EXECUTE_ORDER_3PL',
+      ['name', 'email'],
+    ) as { name: string; email: string };
+    const shippingAddress = requireVerifiedRecord(
+      payload,
+      'shippingAddress',
+      'RECOVERY_EXECUTE_ORDER_3PL',
+      ['street', 'city', 'state', 'postalCode', 'country'],
+    ) as {
+      street: string;
+      city: string;
+      state: string;
+      postalCode: string;
+      country: string;
+    };
+    const lineItems = requireVerifiedLineItems(payload, 'RECOVERY_EXECUTE_ORDER_3PL');
 
     const result = await actionExecutor.create3PLOrder({
       organizationId: context.organizationId,
       recoveryCaseId,
       orderNumber,
       externalReference: orderNumber,
+      customer,
+      shippingAddress,
+      lineItems,
     });
 
     if (!result.success && !result.ambiguous) {
@@ -456,6 +563,15 @@ export function registerRecoveryStepHandlers(
       };
     }
 
+    if (!wh.trackingNumber || !wh.carrier) {
+      throw new JobExecutionError({
+        category: JobErrorCategory.BUSINESS_ERROR,
+        code: 'WAREHOUSE_SHIPMENT_CONTEXT_UNAVAILABLE',
+        message: `Warehouse tracking and carrier are required for order ${orderNumber}`,
+        retryable: false,
+      });
+    }
+
     const safetyFingerprint = computeSafetyFingerprint({
       orderNumber,
       shpFulfillment: shp.fulfillmentStatus,
@@ -479,10 +595,17 @@ export function registerRecoveryStepHandlers(
     const orderNumber = requireOrderNumber(payload, 'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED');
     const recoveryCaseId = requireCaseId(payload, 'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED');
 
-    const state = await actionExecutor.fetchAuthoritativeOrderState(orderNumber);
-    const trackingNumber =
-      (payload.trackingNumber as string) || state.warehouse?.trackingNumber || 'TRK-DEFAULT';
-    const carrier = (payload.carrier as string) || state.warehouse?.carrier || 'FedEx';
+    requireSafeToExecute(payload, 'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED');
+    const trackingNumber = requireVerifiedString(
+      payload,
+      'trackingNumber',
+      'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED',
+    );
+    const carrier = requireVerifiedString(
+      payload,
+      'carrier',
+      'RECOVERY_EXECUTE_SHIPPED_UNFULFILLED',
+    );
 
     const result = await actionExecutor.markShopifyFulfilled({
       organizationId: context.organizationId,

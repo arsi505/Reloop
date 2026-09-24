@@ -9,10 +9,12 @@ import {
   Job,
   ApprovalStatus,
   Approval,
+  RecoveryCaseStatus,
 } from '@prisma/client';
 import { WorkflowTemplateRegistry, evaluateCondition } from '@reloop/workflow-core';
 import { SchedulerConfig } from './config';
 import { CaseResolutionService } from './case-resolution/case-resolution.service';
+import { isDeepStrictEqual } from 'node:util';
 
 export interface WorkflowCoordinatorMetrics {
   scannedCount: number;
@@ -302,6 +304,48 @@ export class WorkflowCoordinator {
       // Reconcile WAITING approval steps
       if (step.status === WorkflowStepStatus.WAITING && step.approvals && step.approvals.length > 0) {
         const approval = step.approvals[0];
+        const approvalGraphMatches =
+          workflow.recoveryCaseId !== null &&
+          approval.organizationId === workflow.organizationId &&
+          approval.workflowId === workflow.id &&
+          approval.workflowStepId === step.id &&
+          approval.recoveryCaseId === workflow.recoveryCaseId;
+        if (!approvalGraphMatches) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.workflowStep.update({
+              where: { id: step.id },
+              data: {
+                status: WorkflowStepStatus.BLOCKED,
+                output: {
+                  code: 'INVALID_APPROVAL_GRAPH',
+                  message: 'Approval does not belong to this workflow, step, tenant, and recovery case',
+                },
+                completedAt: new Date(),
+              },
+            });
+            await tx.workflow.update({
+              where: { id: workflow.id },
+              data: { status: WorkflowStatus.BLOCKED, completedAt: new Date() },
+            });
+            if (workflow.recoveryCaseId) {
+              const caseResult = await tx.recoveryCase.updateMany({
+                where: {
+                  id: workflow.recoveryCaseId,
+                  organizationId: workflow.organizationId,
+                  status: RecoveryCaseStatus.WAITING_APPROVAL,
+                },
+                data: { status: RecoveryCaseStatus.BLOCKED },
+              });
+              if (caseResult.count !== 1) {
+                throw new Error('Recovery case is not waiting for this approval graph');
+              }
+            }
+          });
+          step.status = WorkflowStepStatus.BLOCKED;
+          workflow.status = WorkflowStatus.BLOCKED;
+          result.blockedWorkflows++;
+          return;
+        }
         if (approval.status === ApprovalStatus.APPROVED) {
           const stepDef = stepDefMap.get(step.key);
           const parentDepKey = stepDef?.dependsOn && stepDef.dependsOn.length > 0 ? stepDef.dependsOn[0] : null;
@@ -309,48 +353,159 @@ export class WorkflowCoordinator {
           const parentOutput =
             parentRow && parentRow.output !== null && typeof parentRow.output === 'object' && !Array.isArray(parentRow.output)
               ? (parentRow.output as Record<string, unknown>)
-              : {};
+              : null;
+          const snapshot =
+            approval.previewSnapshot !== null &&
+            typeof approval.previewSnapshot === 'object' &&
+            !Array.isArray(approval.previewSnapshot)
+              ? (approval.previewSnapshot as Record<string, unknown>)
+              : null;
+          const reviewedContext = snapshot?.verifiedContext;
+
+          if (
+            parentRow?.status !== WorkflowStepStatus.SUCCEEDED ||
+            !parentOutput ||
+            reviewedContext === null ||
+            typeof reviewedContext !== 'object' ||
+            Array.isArray(reviewedContext) ||
+            !isDeepStrictEqual(reviewedContext, parentOutput)
+          ) {
+            await this.prisma.$transaction(async (tx) => {
+              await tx.workflowStep.update({
+                where: { id: step.id },
+                data: {
+                  status: WorkflowStepStatus.BLOCKED,
+                  output: {
+                    code: 'INVALID_APPROVAL_CONTEXT',
+                    message: 'Approved context is missing, stale, or does not match verified CHECK output',
+                  },
+                  completedAt: approval.decidedAt ?? new Date(),
+                },
+              });
+              await tx.workflow.update({
+                where: { id: workflow.id },
+                data: { status: WorkflowStatus.BLOCKED, completedAt: new Date() },
+              });
+              const caseResult = await tx.recoveryCase.updateMany({
+                where: {
+                  id: workflow.recoveryCaseId!,
+                  organizationId: workflow.organizationId,
+                  status: RecoveryCaseStatus.WAITING_APPROVAL,
+                },
+                data: { status: RecoveryCaseStatus.BLOCKED },
+              });
+              if (caseResult.count !== 1) {
+                throw new Error('Recovery case is not waiting for this approval graph');
+              }
+            });
+            step.status = WorkflowStepStatus.BLOCKED;
+            workflow.status = WorkflowStatus.BLOCKED;
+            result.blockedWorkflows++;
+            return;
+          }
 
           const approvalOutput = {
-            ...parentOutput,
+            ...(reviewedContext as Record<string, unknown>),
             approved: true,
+            approvalId: approval.id,
             decidedAt: approval.decidedAt ?? new Date(),
           };
 
-          await this.prisma.workflowStep.update({
-            where: { id: step.id },
-            data: {
-              status: WorkflowStepStatus.SUCCEEDED,
-              output: approvalOutput as Prisma.InputJsonValue,
-              completedAt: approval.decidedAt ?? new Date(),
-            },
+          await this.prisma.$transaction(async (tx) => {
+            await tx.workflowStep.update({
+              where: { id: step.id },
+              data: {
+                status: WorkflowStepStatus.SUCCEEDED,
+                output: approvalOutput as Prisma.InputJsonValue,
+                completedAt: approval.decidedAt ?? new Date(),
+              },
+            });
+            await tx.workflow.update({
+              where: { id: workflow.id },
+              data: { status: WorkflowStatus.RUNNING },
+            });
+            const caseResult = await tx.recoveryCase.updateMany({
+              where: {
+                id: workflow.recoveryCaseId!,
+                organizationId: workflow.organizationId,
+                status: RecoveryCaseStatus.WAITING_APPROVAL,
+              },
+              data: { status: RecoveryCaseStatus.RECOVERING },
+            });
+            if (caseResult.count !== 1) {
+              throw new Error('Recovery case is not waiting for this approval graph');
+            }
           });
           step.status = WorkflowStepStatus.SUCCEEDED;
           step.output = approvalOutput as any;
-          if (workflow.status === WorkflowStatus.WAITING) {
-            await this.prisma.workflow.update({
-              where: { id: workflow.id },
+          workflow.status = WorkflowStatus.RUNNING;
+        } else if (approval.status === ApprovalStatus.REJECTED) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.workflowStep.update({
+              where: { id: step.id },
               data: {
-                status: WorkflowStatus.RUNNING,
+                status: WorkflowStepStatus.BLOCKED,
+                completedAt: approval.decidedAt ?? new Date(),
               },
             });
-            workflow.status = WorkflowStatus.RUNNING;
-          }
-        } else if (approval.status === ApprovalStatus.REJECTED) {
-          await this.prisma.workflowStep.update({
-            where: { id: step.id },
-            data: {
-              status: WorkflowStepStatus.BLOCKED,
-              completedAt: approval.decidedAt ?? new Date(),
-            },
+            await tx.workflow.update({
+              where: { id: workflow.id },
+              data: { status: WorkflowStatus.BLOCKED, completedAt: new Date() },
+            });
+            if (workflow.recoveryCaseId) {
+              const caseResult = await tx.recoveryCase.updateMany({
+                where: {
+                  id: workflow.recoveryCaseId,
+                  organizationId: workflow.organizationId,
+                  status: RecoveryCaseStatus.WAITING_APPROVAL,
+                },
+                data: { status: RecoveryCaseStatus.BLOCKED },
+              });
+              if (caseResult.count !== 1) {
+                throw new Error('Recovery case is not waiting for this approval graph');
+              }
+            }
           });
           step.status = WorkflowStepStatus.BLOCKED;
-          await this.prisma.workflow.update({
-            where: { id: workflow.id },
-            data: {
-              status: WorkflowStatus.BLOCKED,
-            },
+          workflow.status = WorkflowStatus.BLOCKED;
+          result.blockedWorkflows++;
+          return;
+        } else if (
+          approval.status === ApprovalStatus.EXPIRED ||
+          (approval.status === ApprovalStatus.PENDING &&
+            approval.expiresAt !== null &&
+            approval.expiresAt <= new Date())
+        ) {
+          await this.prisma.$transaction(async (tx) => {
+            if (approval.status === ApprovalStatus.PENDING) {
+              await tx.approval.updateMany({
+                where: { id: approval.id, status: ApprovalStatus.PENDING },
+                data: { status: ApprovalStatus.EXPIRED },
+              });
+            }
+            await tx.workflowStep.update({
+              where: { id: step.id },
+              data: { status: WorkflowStepStatus.BLOCKED, completedAt: new Date() },
+            });
+            await tx.workflow.update({
+              where: { id: workflow.id },
+              data: { status: WorkflowStatus.BLOCKED, completedAt: new Date() },
+            });
+            if (workflow.recoveryCaseId) {
+              const caseResult = await tx.recoveryCase.updateMany({
+                where: {
+                  id: workflow.recoveryCaseId,
+                  organizationId: workflow.organizationId,
+                  status: RecoveryCaseStatus.WAITING_APPROVAL,
+                },
+                data: { status: RecoveryCaseStatus.BLOCKED },
+              });
+              if (caseResult.count !== 1) {
+                throw new Error('Recovery case is not waiting for this approval graph');
+              }
+            }
           });
+          step.status = WorkflowStepStatus.BLOCKED;
           workflow.status = WorkflowStatus.BLOCKED;
           result.blockedWorkflows++;
           return;
@@ -786,7 +941,7 @@ export class WorkflowCoordinator {
   private async pauseStepForApproval(
     workflow: Workflow,
     step: WorkflowStep,
-    stepDef: { key: string; preview?: any },
+    stepDef: { key: string; preview?: any; dependsOn?: string[] },
     stepOutputs?: Record<string, unknown>,
   ): Promise<void> {
     // Dynamic preview from upstream CHECK output if available (Requirement 23)
@@ -799,7 +954,34 @@ export class WorkflowCoordinator {
         }
       }
     }
-    const previewJson = dynamicPreview ? JSON.stringify(dynamicPreview) : null;
+    const dependencyKeys = stepDef.dependsOn ?? [];
+    if (dependencyKeys.length !== 1) {
+      throw new Error(
+        `Approval step ${step.key} must have exactly one verified dependency`,
+      );
+    }
+    const verifiedContext = stepOutputs?.[dependencyKeys[0]];
+    if (
+      verifiedContext === null ||
+      typeof verifiedContext !== 'object' ||
+      Array.isArray(verifiedContext)
+    ) {
+      throw new Error(
+        `Approval step ${step.key} is missing verified dependency output`,
+      );
+    }
+    const previewRecord =
+      dynamicPreview !== null &&
+      typeof dynamicPreview === 'object' &&
+      !Array.isArray(dynamicPreview)
+        ? dynamicPreview
+        : dynamicPreview === undefined
+          ? {}
+          : { preview: dynamicPreview };
+    const previewJson = JSON.stringify({
+      ...previewRecord,
+      verifiedContext,
+    });
 
     await this.prisma.$transaction(async (tx) => {
       // 1. Insert Approval row idempotently

@@ -857,7 +857,7 @@ describe('Audit Remediation E-01: Production Recovery Pipeline Wiring', () => {
         data: {
           organizationId: testOrgId,
           type: RecoveryCaseType.TRACKING_MISSING_IN_SHOPIFY,
-          status: RecoveryCaseStatus.OPEN,
+          status: RecoveryCaseStatus.WAITING_APPROVAL,
           recoveryLevel: RecoveryLevel.REQUIRE_APPROVAL,
           summary: `Approval test case ${runId}`,
         },

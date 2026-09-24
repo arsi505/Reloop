@@ -193,7 +193,7 @@ describe('Day 11: Approvals API & HITL Boundary E2E', () => {
         organizationId: orgId,
         type: RecoveryCaseType.STUCK_ORDER,
         recoveryLevel: RecoveryLevel.REQUIRE_APPROVAL,
-        status: RecoveryCaseStatus.OPEN,
+        status: RecoveryCaseStatus.WAITING_APPROVAL,
         summary: 'Delivery carrier exception',
       },
     });
@@ -208,14 +208,33 @@ describe('Day 11: Approvals API & HITL Boundary E2E', () => {
       },
     });
 
+    const checkOutput = {
+      safeToExecute: true,
+      orderNumber: 'ORD-E2E-999',
+      safetyFingerprint: 'e2e-verified-check-context',
+    };
+    const checkStep = await prisma.workflowStep.create({
+      data: {
+        organizationId: orgId,
+        workflowId: workflow.id,
+        key: 'CHECK',
+        name: 'Verify approval context',
+        position: 1,
+        status: WorkflowStepStatus.SUCCEEDED,
+        output: checkOutput,
+        completedAt: new Date(),
+      },
+    });
+
     const step = await prisma.workflowStep.create({
       data: {
         organizationId: orgId,
         workflowId: workflow.id,
         key: 'STEP_APPROVAL',
         name: 'Step Approval - Human Decision',
-        position: 1,
+        position: 2,
         status: overrides.stepStatus ?? WorkflowStepStatus.WAITING,
+        dependsOnStepId: checkStep.id,
       },
     });
 
@@ -226,7 +245,7 @@ describe('Day 11: Approvals API & HITL Boundary E2E', () => {
         workflowId: workflow.id,
         workflowStepId: step.id,
         status: overrides.approvalStatus ?? ApprovalStatus.PENDING,
-        previewSnapshot: validPreviewSnapshot,
+        previewSnapshot: { ...validPreviewSnapshot, verifiedContext: checkOutput },
       },
     });
 

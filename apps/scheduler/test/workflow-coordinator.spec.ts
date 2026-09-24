@@ -771,6 +771,13 @@ describe('Day 10: Workflow Coordination Engine', () => {
   });
 
   describe('Human-in-the-Loop Approval Workflow (SYSTEM_APPROVAL_V1)', () => {
+    beforeEach(async () => {
+      await prisma.recoveryCase.update({
+        where: { id: testRecoveryCaseId },
+        data: { status: RecoveryCaseStatus.WAITING_APPROVAL },
+      });
+    });
+
     it('pauses workflow in WAITING and creates Approval record with previewSnapshot when approval step readied, creating ZERO jobs for approval step', async () => {
       const instance = await createWorkflow({
         templateKey: 'SYSTEM_APPROVAL',
@@ -832,6 +839,7 @@ describe('Day 10: Workflow Coordination Engine', () => {
       expect(snapshot.proposedAction).toContain('replacement shipment');
       expect(snapshot.safetyChecks).toBeInstanceOf(Array);
       expect(snapshot.changes).toBeInstanceOf(Array);
+      expect(snapshot.verifiedContext).toEqual({ verified: true });
     });
 
     it('multi-coordinator idempotency: subsequent ticks do not duplicate Approval or create jobs', async () => {
@@ -847,7 +855,11 @@ describe('Day 10: Workflow Coordination Engine', () => {
       });
       await prisma.job.update({
         where: { id: stepCheck!.jobs[0].id },
-        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
       });
 
       // First tick creates approval
@@ -884,7 +896,11 @@ describe('Day 10: Workflow Coordination Engine', () => {
       });
       await prisma.job.update({
         where: { id: stepCheck!.jobs[0].id },
-        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
       });
       await coordinator.tick();
 
@@ -914,7 +930,11 @@ describe('Day 10: Workflow Coordination Engine', () => {
       });
       await prisma.job.update({
         where: { id: stepCheck!.jobs[0].id },
-        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
       });
 
       // 2. Step pauses in WAITING
@@ -994,7 +1014,11 @@ describe('Day 10: Workflow Coordination Engine', () => {
       });
       await prisma.job.update({
         where: { id: stepCheck!.jobs[0].id },
-        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
       });
 
       // 2. Step pauses in WAITING
@@ -1044,7 +1068,7 @@ describe('Day 10: Workflow Coordination Engine', () => {
       expect(stepVerify?.jobs).toHaveLength(0);
     });
 
-    it('expired approval leaves step and workflow in WAITING, creating zero jobs', async () => {
+    it('expired approval blocks step, workflow, and case, creating zero jobs', async () => {
       const instance = await createWorkflow({
         templateKey: 'SYSTEM_APPROVAL',
         templateVersion: 1,
@@ -1058,7 +1082,11 @@ describe('Day 10: Workflow Coordination Engine', () => {
       });
       await prisma.job.update({
         where: { id: stepCheck!.jobs[0].id },
-        data: { status: JobStatus.SUCCEEDED, completedAt: new Date() },
+        data: {
+          status: JobStatus.SUCCEEDED,
+          payload: { result: { output: { verified: true } } },
+          completedAt: new Date(),
+        },
       });
 
       // 2. Pause in WAITING
@@ -1081,15 +1109,21 @@ describe('Day 10: Workflow Coordination Engine', () => {
       // 4. Coordinator tick
       const tickExpired = await coordinator.tick();
       expect(tickExpired.createdJobs).toBe(0);
+      expect(tickExpired.blockedWorkflows).toBe(1);
 
-      // 5. Verify step and workflow remain in WAITING and no jobs created
+      // 5. Verify stale approval cannot leave an executable graph waiting forever
       const stepApprovalCheck = await prisma.workflowStep.findUnique({
         where: { workflowId_key: { workflowId: instance.id, key: 'STEP_APPROVAL' } },
       });
-      expect(stepApprovalCheck?.status).toBe(WorkflowStepStatus.WAITING);
+      expect(stepApprovalCheck?.status).toBe(WorkflowStepStatus.BLOCKED);
 
       const wfCheck = await prisma.workflow.findUnique({ where: { id: instance.id } });
-      expect(wfCheck?.status).toBe(WorkflowStatus.WAITING);
+      expect(wfCheck?.status).toBe(WorkflowStatus.BLOCKED);
+
+      const caseCheck = await prisma.recoveryCase.findUnique({
+        where: { id: testRecoveryCaseId },
+      });
+      expect(caseCheck?.status).toBe(RecoveryCaseStatus.BLOCKED);
 
       const stepExecute = await prisma.workflowStep.findUnique({
         where: { workflowId_key: { workflowId: instance.id, key: 'STEP_EXECUTE' } },

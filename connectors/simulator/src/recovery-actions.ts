@@ -13,15 +13,15 @@ export interface Create3PLOrderParams {
   recoveryCaseId: string;
   orderNumber: string;
   externalReference?: string;
-  customer?: { name: string; email: string };
-  shippingAddress?: {
+  customer: { name: string; email: string };
+  shippingAddress: {
     street: string;
     city: string;
     state: string;
     postalCode: string;
     country: string;
   };
-  lineItems?: Array<{ sku: string; name: string; quantity: number; price: number }>;
+  lineItems: Array<{ sku: string; name: string; quantity: number; price: number }>;
 }
 
 export interface MarkFulfilledParams {
@@ -355,15 +355,9 @@ export class SimulatorRecoveryActionAdapter implements RecoveryActionExecutor {
           id: `wh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           orderNumber,
           externalReference: externalReference || orderNumber,
-          customer: customer || { name: 'Customer', email: 'cust@example.com' },
-          shippingAddress: shippingAddress || {
-            street: '123 Main St',
-            city: 'Anytown',
-            state: 'CA',
-            postalCode: '90001',
-            country: 'US',
-          },
-          lineItems: lineItems || [{ sku: 'SKU-DEFAULT', name: 'Item', quantity: 1, price: 10 }],
+          customer,
+          shippingAddress,
+          lineItems,
           status: 'RECEIVED',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),

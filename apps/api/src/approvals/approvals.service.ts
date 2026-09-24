@@ -9,10 +9,32 @@ import {
 } from '../prisma/prisma.service';
 import {
   ApprovalStatus,
+  Prisma,
+  RecoveryCaseStatus,
   WorkflowStatus,
   WorkflowStepStatus,
 } from '@reloop/database';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
+import { isDeepStrictEqual } from 'node:util';
+
+type ApprovalDecisionGraph = Prisma.ApprovalGetPayload<{
+  include: { workflow: true; workflowStep: true; recoveryCase: true };
+}>;
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasNonEmptyStringFields(
+  value: Record<string, unknown>,
+  fields: string[],
+): boolean {
+  return fields.every((field) => isNonEmptyString(value[field]));
+}
 
 @Injectable()
 export class ApprovalsService {
@@ -20,6 +42,141 @@ export class ApprovalsService {
     private readonly prisma: PrismaService,
     private readonly realtimePublisher: RealtimePublisher,
   ) {}
+
+  private validateDecisionGraph(
+    approval: ApprovalDecisionGraph,
+    organizationId: string,
+  ): void {
+    if (!approval.workflowId || !approval.workflowStepId) {
+      throw new ConflictException(
+        'Approval is not linked to a complete workflow decision graph',
+      );
+    }
+    if (
+      approval.recoveryCase.organizationId !== organizationId ||
+      approval.workflow?.organizationId !== organizationId ||
+      approval.workflowStep?.organizationId !== organizationId ||
+      approval.workflow?.recoveryCaseId !== approval.recoveryCaseId ||
+      approval.workflowStep?.workflowId !== approval.workflowId
+    ) {
+      throw new ConflictException(
+        'Approval workflow, step, and recovery case relationship is invalid',
+      );
+    }
+  }
+
+  private async loadVerifiedContext(
+    tx: Prisma.TransactionClient,
+    approval: ApprovalDecisionGraph,
+  ): Promise<Record<string, unknown>> {
+    const parentStepId = approval.workflowStep?.dependsOnStepId;
+    if (!parentStepId || !approval.workflowId) {
+      throw new BadRequestException(
+        'Approval is missing its verified CHECK dependency',
+      );
+    }
+
+    const lockedParents = await tx.$queryRaw<
+      { id: string; status: WorkflowStepStatus; output: unknown }[]
+    >`
+      SELECT id, status, output
+      FROM workflow_steps
+      WHERE id = ${parentStepId}::uuid
+        AND organization_id = ${approval.organizationId}::uuid
+        AND workflow_id = ${approval.workflowId}::uuid
+      FOR UPDATE
+    `;
+    const parent = lockedParents[0];
+    if (
+      !parent ||
+      parent.status !== WorkflowStepStatus.SUCCEEDED ||
+      !isJsonRecord(parent.output)
+    ) {
+      throw new BadRequestException(
+        'Verified CHECK output is unavailable or no longer valid',
+      );
+    }
+
+    const snapshot = approval.previewSnapshot;
+    const reviewedContext = isJsonRecord(snapshot)
+      ? snapshot.verifiedContext
+      : undefined;
+    if (
+      !isJsonRecord(reviewedContext) ||
+      !isDeepStrictEqual(reviewedContext, parent.output)
+    ) {
+      throw new ConflictException(
+        'Persisted approval snapshot does not match verified CHECK output',
+      );
+    }
+
+    this.validateRequiredRecoveryContext(
+      approval.workflow?.templateKey ?? '',
+      reviewedContext,
+    );
+    return reviewedContext;
+  }
+
+  private validateRequiredRecoveryContext(
+    templateKey: string,
+    context: Record<string, unknown>,
+  ): void {
+    if (!templateKey.startsWith('RECOVERY_')) return;
+
+    if (context.safeToExecute !== true || !isNonEmptyString(context.orderNumber)) {
+      throw new BadRequestException(
+        'Verified CHECK context is missing safeToExecute or orderNumber',
+      );
+    }
+
+    if (
+      templateKey === 'RECOVERY_TRACKING_MISSING_APPROVAL' ||
+      templateKey === 'RECOVERY_SHIPPED_UNFULFILLED'
+    ) {
+      if (
+        !isNonEmptyString(context.trackingNumber) ||
+        !isNonEmptyString(context.carrier)
+      ) {
+        throw new BadRequestException(
+          'Verified CHECK context is missing trackingNumber or carrier',
+        );
+      }
+    }
+
+    if (templateKey === 'RECOVERY_ORDER_MISSING_3PL') {
+      const customer = context.customer;
+      const shippingAddress = context.shippingAddress;
+      const lineItems = context.lineItems;
+      if (
+        !isJsonRecord(customer) ||
+        !hasNonEmptyStringFields(customer, ['name', 'email']) ||
+        !isJsonRecord(shippingAddress) ||
+        !hasNonEmptyStringFields(shippingAddress, [
+          'street',
+          'city',
+          'state',
+          'postalCode',
+          'country',
+        ]) ||
+        !Array.isArray(lineItems) ||
+        lineItems.length === 0 ||
+        lineItems.some(
+          (item) =>
+            !isJsonRecord(item) ||
+            !hasNonEmptyStringFields(item, ['sku', 'name']) ||
+            typeof item.quantity !== 'number' ||
+            !Number.isFinite(item.quantity) ||
+            item.quantity <= 0 ||
+            typeof item.price !== 'number' ||
+            !Number.isFinite(item.price),
+        )
+      ) {
+        throw new BadRequestException(
+          'Verified CHECK context is missing customer, shippingAddress, or lineItems',
+        );
+      }
+    }
+  }
 
   async listApprovals(organizationId: string, status?: ApprovalStatus) {
     return this.prisma.approval.findMany({
@@ -109,9 +266,9 @@ export class ApprovalsService {
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Fetch approval with tenant scoping and linked workflow
-      const approval = await tx.approval.findFirst({
+      let approval = await tx.approval.findFirst({
         where: { id, organizationId },
-        include: { workflow: true, workflowStep: true },
+        include: { workflow: true, workflowStep: true, recoveryCase: true },
       });
 
       if (!approval) {
@@ -131,6 +288,29 @@ export class ApprovalsService {
           'Approval has already been decided or is not pending',
         );
       }
+      approval = (await tx.approval.findFirst({
+        where: { id, organizationId },
+        include: { workflow: true, workflowStep: true, recoveryCase: true },
+      }))!;
+      if (approval.expiresAt && approval.expiresAt <= new Date()) {
+        throw new ConflictException('Approval has expired');
+      }
+      this.validateDecisionGraph(approval, organizationId);
+
+      const lockedCases = await tx.$queryRaw<
+        { id: string; status: RecoveryCaseStatus }[]
+      >`
+        SELECT id, status FROM recovery_cases
+        WHERE id = ${approval.recoveryCaseId}::uuid
+          AND organization_id = ${organizationId}::uuid
+        FOR UPDATE
+      `;
+      const lockedCase = lockedCases[0];
+      if (!lockedCase || lockedCase.status !== RecoveryCaseStatus.WAITING_APPROVAL) {
+        throw new BadRequestException(
+          `Cannot decide approval for recovery case in status: ${lockedCase?.status ?? 'UNKNOWN'}`,
+        );
+      }
 
       // 2. Row lock and fence Workflow: must be WAITING
       if (approval.workflowId) {
@@ -142,7 +322,11 @@ export class ApprovalsService {
         `;
 
         const lockedWf = lockedWorkflows[0];
-        if (!lockedWf || lockedWf.status !== WorkflowStatus.WAITING) {
+        if (
+          !lockedWf ||
+          lockedWf.status !== WorkflowStatus.WAITING ||
+          approval.workflow?.recoveryCaseId !== approval.recoveryCaseId
+        ) {
           throw new BadRequestException(
             `Cannot decide approval for workflow in terminal/blocked status: ${lockedWf?.status ?? 'UNKNOWN'}`,
           );
@@ -167,13 +351,22 @@ export class ApprovalsService {
         }
       }
 
+      const verifiedContext = await this.loadVerifiedContext(tx, approval);
+      const decisionAt = new Date();
+      const approvalOutput = {
+        ...verifiedContext,
+        approved: true,
+        approvalId: approval.id,
+        decidedAt: decisionAt.toISOString(),
+      };
+
       // 4. Atomic CAS update on PENDING approval
       const rowsUpdated = await tx.$executeRaw`
         UPDATE approvals
         SET
           status = 'APPROVED'::"ApprovalStatus",
           decided_by_user_id = ${actorUserId}::uuid,
-          decided_at = NOW(),
+          decided_at = ${decisionAt},
           reason = ${note?.trim() || null},
           updated_at = NOW()
         WHERE
@@ -194,7 +387,8 @@ export class ApprovalsService {
           UPDATE workflow_steps
           SET
             status = 'SUCCEEDED'::"WorkflowStepStatus",
-            completed_at = NOW(),
+            output = ${JSON.stringify(approvalOutput)}::jsonb,
+            completed_at = ${decisionAt},
             updated_at = NOW()
           WHERE
             id = ${approval.workflowStepId}::uuid
@@ -226,6 +420,22 @@ export class ApprovalsService {
             'Cannot decide approval for workflow in terminal/blocked status',
           );
         }
+      }
+
+      const caseRows = await tx.$executeRaw`
+        UPDATE recovery_cases
+        SET
+          status = 'RECOVERING'::"RecoveryCaseStatus",
+          updated_at = NOW()
+        WHERE
+          id = ${approval.recoveryCaseId}::uuid
+          AND organization_id = ${organizationId}::uuid
+          AND status = 'WAITING_APPROVAL'::"RecoveryCaseStatus"
+      `;
+      if (caseRows === 0) {
+        throw new ConflictException(
+          'Recovery case is no longer waiting for approval',
+        );
       }
 
       // 7. Atomic AuditLog creation in the same transaction
@@ -275,7 +485,7 @@ export class ApprovalsService {
         eventType: 'recovery.updated',
         resourceId: result.recoveryCaseId,
         resourceType: 'RECOVERY',
-        status: 'RUNNING',
+        status: RecoveryCaseStatus.RECOVERING,
         changedAt: new Date().toISOString(),
       });
     }
@@ -303,9 +513,9 @@ export class ApprovalsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Fetch approval with tenant scoping and linked workflow
-      const approval = await tx.approval.findFirst({
+      let approval = await tx.approval.findFirst({
         where: { id, organizationId },
-        include: { workflow: true, workflowStep: true },
+        include: { workflow: true, workflowStep: true, recoveryCase: true },
       });
 
       if (!approval) {
@@ -325,6 +535,29 @@ export class ApprovalsService {
           'Approval has already been decided or is not pending',
         );
       }
+      approval = (await tx.approval.findFirst({
+        where: { id, organizationId },
+        include: { workflow: true, workflowStep: true, recoveryCase: true },
+      }))!;
+      if (approval.expiresAt && approval.expiresAt <= new Date()) {
+        throw new ConflictException('Approval has expired');
+      }
+      this.validateDecisionGraph(approval, organizationId);
+
+      const lockedCases = await tx.$queryRaw<
+        { id: string; status: RecoveryCaseStatus }[]
+      >`
+        SELECT id, status FROM recovery_cases
+        WHERE id = ${approval.recoveryCaseId}::uuid
+          AND organization_id = ${organizationId}::uuid
+        FOR UPDATE
+      `;
+      const lockedCase = lockedCases[0];
+      if (!lockedCase || lockedCase.status !== RecoveryCaseStatus.WAITING_APPROVAL) {
+        throw new BadRequestException(
+          `Cannot decide approval for recovery case in status: ${lockedCase?.status ?? 'UNKNOWN'}`,
+        );
+      }
 
       // 2. Row lock and fence Workflow: must be WAITING
       if (approval.workflowId) {
@@ -336,7 +569,11 @@ export class ApprovalsService {
         `;
 
         const lockedWf = lockedWorkflows[0];
-        if (!lockedWf || lockedWf.status !== WorkflowStatus.WAITING) {
+        if (
+          !lockedWf ||
+          lockedWf.status !== WorkflowStatus.WAITING ||
+          approval.workflow?.recoveryCaseId !== approval.recoveryCaseId
+        ) {
           throw new BadRequestException(
             `Cannot decide approval for workflow in terminal/blocked status: ${lockedWf?.status ?? 'UNKNOWN'}`,
           );
@@ -408,6 +645,7 @@ export class ApprovalsService {
           UPDATE workflows
           SET
             status = 'BLOCKED'::"WorkflowStatus",
+            completed_at = NOW(),
             updated_at = NOW()
           WHERE
             id = ${approval.workflowId}::uuid
@@ -420,6 +658,22 @@ export class ApprovalsService {
             'Cannot decide approval for workflow in terminal/blocked status',
           );
         }
+      }
+
+      const caseRows = await tx.$executeRaw`
+        UPDATE recovery_cases
+        SET
+          status = 'BLOCKED'::"RecoveryCaseStatus",
+          updated_at = NOW()
+        WHERE
+          id = ${approval.recoveryCaseId}::uuid
+          AND organization_id = ${organizationId}::uuid
+          AND status = 'WAITING_APPROVAL'::"RecoveryCaseStatus"
+      `;
+      if (caseRows === 0) {
+        throw new ConflictException(
+          'Recovery case is no longer waiting for approval',
+        );
       }
 
       // 7. Atomic AuditLog creation in the same transaction
@@ -469,7 +723,7 @@ export class ApprovalsService {
         eventType: 'recovery.updated',
         resourceId: result.recoveryCaseId,
         resourceType: 'RECOVERY',
-        status: 'BLOCKED',
+        status: RecoveryCaseStatus.BLOCKED,
         changedAt: new Date().toISOString(),
       });
     }
