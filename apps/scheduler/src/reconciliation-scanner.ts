@@ -10,10 +10,13 @@ export interface OrderSnapshotProvider {
   fetchSnapshots(organizationId: string, limit: number): Promise<NormalizedOrderSnapshot[]>;
 }
 
+export const RECONCILIATION_ORGANIZATION_BATCH_SIZE = 20;
+
 export class ReconciliationScanner {
   private isRunning = false;
   private isScanning = false;
   private timer: NodeJS.Timeout | null = null;
+  private organizationScanCursor: string | null = null;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -96,11 +99,18 @@ export class ReconciliationScanner {
         return { scannedOrders: 0, findingsCount: 0, casesCount: 0 };
       }
 
-      // Fetch active organizations
-      const orgs = await this.prisma.organization.findMany({
+      // Walk organizations in stable, bounded primary-key pages. Once the final page
+      // completes, restart the cycle so newly inserted lower IDs are eventually visited.
+      const page = await this.prisma.organization.findMany({
+        where: this.organizationScanCursor
+          ? { id: { gt: this.organizationScanCursor } }
+          : undefined,
         select: { id: true },
-        take: 20,
+        orderBy: { id: 'asc' },
+        take: RECONCILIATION_ORGANIZATION_BATCH_SIZE + 1,
       });
+      const hasMore = page.length > RECONCILIATION_ORGANIZATION_BATCH_SIZE;
+      const orgs = page.slice(0, RECONCILIATION_ORGANIZATION_BATCH_SIZE);
 
       for (const org of orgs) {
         const snapshots = await this.snapshotProvider.fetchSnapshots(
@@ -123,6 +133,10 @@ export class ReconciliationScanner {
           }
         }
       }
+
+      const lastOrganization = orgs[orgs.length - 1];
+      this.organizationScanCursor =
+        hasMore && lastOrganization ? lastOrganization.id : null;
     } finally {
       this.isScanning = false;
     }
