@@ -45,6 +45,8 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  app.enableShutdownHooks();
+
   await app.listen(port);
   logger.log(`Reloop Core API operational and listening on port ${port}`);
   logger.log(`Health endpoint accessible at http://localhost:${port}/health`);

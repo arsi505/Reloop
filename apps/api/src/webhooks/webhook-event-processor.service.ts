@@ -1,4 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   Prisma,
   IntegrationEvent,
@@ -14,20 +21,99 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TargetedReconciliationService } from './targeted-reconciliation.service';
 
 @Injectable()
-export class WebhookEventProcessorService {
+export class WebhookEventProcessorService
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(WebhookEventProcessorService.name);
   private readonly adapters = new Map<string, WebhookAdapter>();
+
+  private timer: NodeJS.Timeout | null = null;
+  private running = false;
+  private isTicking = false;
+  private intervalMs = 2000;
+  private staleThresholdMs = 60000;
+  private batchSize = 50;
+  private enabled = true;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly targetedReconciliation: TargetedReconciliationService,
+    @Optional() private readonly configService?: ConfigService,
   ) {
     const simulatorAdapter = new SimulatorWebhookAdapter();
     this.adapters.set('SIMULATOR', simulatorAdapter);
     this.adapters.set('SHOPIFY', simulatorAdapter);
     this.adapters.set('SHIPSTATION', simulatorAdapter);
     this.adapters.set('GENERIC_3PL', simulatorAdapter);
+
+    if (this.configService) {
+      const nodeEnv = this.configService.get<string>('nodeEnv');
+      this.enabled =
+        this.configService.get<boolean>('webhookScannerEnabled') ?? true;
+      this.intervalMs =
+        this.configService.get<number>('webhookScannerIntervalMs') ??
+        (nodeEnv === 'test' ? 100 : 2000);
+      this.staleThresholdMs =
+        this.configService.get<number>('webhookStaleThresholdMs') ?? 60000;
+      this.batchSize =
+        this.configService.get<number>('webhookScannerBatchSize') ?? 50;
+    }
   }
+
+  onModuleInit(): void {
+    if (this.enabled) {
+      this.start();
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.stop();
+  }
+
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.logger.log(
+      `[Reloop WebhookProcessor] Started durable recovery scanner (interval: ${this.intervalMs}ms, staleThreshold: ${this.staleThresholdMs}ms, batchSize: ${this.batchSize})`,
+    );
+
+    this.timer = setInterval(async () => {
+      try {
+        await this.tick();
+      } catch (err: any) {
+        this.logger.error(
+          `[Reloop WebhookProcessor] Error in scan tick: ${err.message}`,
+          err.stack,
+        );
+      }
+    }, this.intervalMs);
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    while (this.isTicking) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    this.logger.log('[Reloop WebhookProcessor] Stopped durable recovery scanner.');
+  }
+
+  getIsRunning(): boolean {
+    return this.running;
+  }
+
+  setStaleThresholdMs(ms: number): void {
+    this.staleThresholdMs = ms;
+  }
+
+  setIntervalMs(ms: number): void {
+    this.intervalMs = ms;
+  }
+
+  private readonly inFlight = new Map<string, Promise<IntegrationEvent>>();
 
   getAdapter(provider: string): WebhookAdapter {
     const adapter = this.adapters.get(provider.toUpperCase());
@@ -40,8 +126,68 @@ export class WebhookEventProcessorService {
 
   /**
    * Processes a single IntegrationEvent durably and idempotently.
+   * Joins in-flight promise if currently processing in-process,
+   * otherwise atomically claims eligible events (RECEIVED or stale PROCESSING) via conditional updateMany.
    */
-  async processEvent(eventId: string): Promise<IntegrationEvent> {
+  async processEvent(
+    eventId: string,
+    overrideStaleThresholdMs?: number,
+  ): Promise<IntegrationEvent> {
+    const existing = this.inFlight.get(eventId);
+    if (existing) {
+      return existing;
+    }
+
+    const promise = this.doProcessEvent(eventId, overrideStaleThresholdMs);
+    this.inFlight.set(eventId, promise);
+    try {
+      return await promise;
+    } finally {
+      this.inFlight.delete(eventId);
+    }
+  }
+
+  private async doProcessEvent(
+    eventId: string,
+    overrideStaleThresholdMs?: number,
+  ): Promise<IntegrationEvent> {
+    const effectiveStaleThresholdMs =
+      overrideStaleThresholdMs ?? this.staleThresholdMs;
+    const staleThreshold = new Date(Date.now() - effectiveStaleThresholdMs);
+
+    // 1. Atomic CAS claim:
+    // Only an event in RECEIVED or stale PROCESSING (updatedAt < staleThreshold) can be claimed.
+    // If active processing is underway or event is already terminal (PROCESSED/FAILED/IGNORED_DUPLICATE), count is 0.
+    const claimResult = await this.prisma.integrationEvent.updateMany({
+      where: {
+        id: eventId,
+        OR: [
+          { status: IntegrationEventStatus.RECEIVED },
+          {
+            status: IntegrationEventStatus.PROCESSING,
+            updatedAt: { lt: staleThreshold },
+          },
+        ],
+      },
+      data: {
+        status: IntegrationEventStatus.PROCESSING,
+        updatedAt: new Date(),
+      },
+    });
+
+    if (claimResult.count === 0) {
+      // Event could not be claimed: either already claimed by an active processor,
+      // already processed, or terminal failed. Return current state without duplicate work.
+      const current = await this.prisma.integrationEvent.findUnique({
+        where: { id: eventId },
+        include: { integration: true },
+      });
+      if (!current) {
+        throw new Error(`IntegrationEvent ${eventId} not found`);
+      }
+      return current;
+    }
+
     const event = await this.prisma.integrationEvent.findUnique({
       where: { id: eventId },
       include: { integration: true },
@@ -50,19 +196,6 @@ export class WebhookEventProcessorService {
     if (!event) {
       throw new Error(`IntegrationEvent ${eventId} not found`);
     }
-
-    if (
-      event.status === IntegrationEventStatus.PROCESSED ||
-      event.status === IntegrationEventStatus.IGNORED_DUPLICATE
-    ) {
-      return event;
-    }
-
-    // Mark as PROCESSING
-    await this.prisma.integrationEvent.update({
-      where: { id: eventId },
-      data: { status: IntegrationEventStatus.PROCESSING },
-    });
 
     const adapter = this.getAdapter(event.integration.provider);
 
@@ -255,34 +388,49 @@ export class WebhookEventProcessorService {
 
   /**
    * Scanner tick to process pending RECEIVED or stale PROCESSING events.
+   * Guarded against re-entrancy and uses configured batchSize and staleThresholdMs.
    */
-  async tick(batchSize = 50): Promise<number> {
-    const staleThreshold = new Date(Date.now() - 60000);
-
-    const events = await this.prisma.integrationEvent.findMany({
-      where: {
-        OR: [
-          { status: IntegrationEventStatus.RECEIVED },
-          {
-            status: IntegrationEventStatus.PROCESSING,
-            updatedAt: { lt: staleThreshold },
-          },
-        ],
-      },
-      take: batchSize,
-      orderBy: { createdAt: 'asc' },
-    });
-
-    let processedCount = 0;
-    for (const ev of events) {
-      try {
-        await this.processEvent(ev.id);
-        processedCount++;
-      } catch (err: any) {
-        this.logger.error(`Error processing event ${ev.id}:`, err.message);
-      }
+  async tick(batchSize = this.batchSize): Promise<number> {
+    if (this.isTicking) {
+      return 0;
     }
+    this.isTicking = true;
+    try {
+      const staleThreshold = new Date(Date.now() - this.staleThresholdMs);
 
-    return processedCount;
+      const events = await this.prisma.integrationEvent.findMany({
+        where: {
+          OR: [
+            { status: IntegrationEventStatus.RECEIVED },
+            {
+              status: IntegrationEventStatus.PROCESSING,
+              updatedAt: { lt: staleThreshold },
+            },
+          ],
+        },
+        take: batchSize,
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+
+      let processedCount = 0;
+      for (const ev of events) {
+        try {
+          const res = await this.processEvent(ev.id);
+          if (res.status === IntegrationEventStatus.PROCESSED) {
+            processedCount++;
+          }
+        } catch (err: any) {
+          this.logger.error(
+            `[Reloop WebhookProcessor] Error processing event ${ev.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
+      return processedCount;
+    } finally {
+      this.isTicking = false;
+    }
   }
 }

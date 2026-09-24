@@ -190,6 +190,23 @@ export class WebhooksService {
       this.logger.log(
         `Deduplicated incoming event (providerEventId: ${providerEventId}) for integration ${integration.id}`,
       );
+
+      // Duplicate delivery must not permanently strand an earlier RECEIVED or stale PROCESSING row.
+      // Trigger background processing as best-effort wake-up while durable scanner guarantees recovery.
+      if (
+        existingEvent.status === IntegrationEventStatus.RECEIVED ||
+        existingEvent.status === IntegrationEventStatus.PROCESSING
+      ) {
+        setImmediate(() => {
+          this.processor.processEvent(existingEvent.id).catch((err) => {
+            this.logger.error(
+              `Failed to process stranded duplicate event ${existingEvent.id}: ${err.message}`,
+              err.stack,
+            );
+          });
+        });
+      }
+
       return {
         status: 'ignored_duplicate',
         eventId: existingEvent.id,
@@ -343,6 +360,21 @@ export class WebhooksService {
             },
           },
         });
+
+        if (
+          existingRaceEvent &&
+          (existingRaceEvent.status === IntegrationEventStatus.RECEIVED ||
+            existingRaceEvent.status === IntegrationEventStatus.PROCESSING)
+        ) {
+          setImmediate(() => {
+            this.processor.processEvent(existingRaceEvent.id).catch((err2) => {
+              this.logger.error(
+                `Failed to process stranded race event ${existingRaceEvent.id}: ${err2.message}`,
+                err2.stack,
+              );
+            });
+          });
+        }
 
         return {
           status: 'ignored_duplicate',

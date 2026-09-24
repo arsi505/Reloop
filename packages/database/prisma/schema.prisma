@@ -340,6 +340,8 @@ model IntegrationEvent {
   @@index([organizationId, status])
   @@index([integrationId])
   @@index([receivedAt])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
   @@map("integration_events")
 }
 

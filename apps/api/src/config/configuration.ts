@@ -52,6 +52,13 @@ export default () => {
     shopifyRedirectUri: process.env.SHOPIFY_REDIRECT_URI || 'http://localhost:3101/integrations/shopify/callback',
     integrationEncryptionKey,
     shopifyInitialSyncMaxOrders: parseInt(process.env.SHOPIFY_INITIAL_SYNC_MAX_ORDERS || '250', 10),
+    webhookScannerEnabled: process.env.WEBHOOK_SCANNER_ENABLED !== 'false',
+    webhookScannerIntervalMs: parseInt(
+      process.env.WEBHOOK_SCANNER_INTERVAL_MS || (nodeEnv === 'test' ? '100' : '2000'),
+      10,
+    ),
+    webhookStaleThresholdMs: parseInt(process.env.WEBHOOK_STALE_THRESHOLD_MS || '60000', 10),
+    webhookScannerBatchSize: parseInt(process.env.WEBHOOK_SCANNER_BATCH_SIZE || '50', 10),
     nodeEnv,
   };
 };

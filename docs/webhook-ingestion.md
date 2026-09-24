@@ -86,16 +86,33 @@ External Provider / Simulator Webhook
 
 ## 4. Durable Event Ingestion & Deduplication
 
-1. **Durable Persistence Before Response**: An incoming webhook is durably committed to the database as an `IntegrationEvent` with `status: RECEIVED` before responding to the provider.
-2. **Fast Provider Response**: The HTTP controller performs only necessary verification and persistence, returning in `< 20ms`. Heavy processing occurs asynchronously.
-3. **Database-Enforced Deduplication**: A unique constraint `@@unique([integrationId, providerEventId])` guarantees that identical events deliver exactly one database row. Concurrent duplicates return `200 OK` with `{ status: 'ignored_duplicate' }` and create zero duplicate side effects.
+1. **Durable Persistence Before Response**: An incoming webhook is durably committed to PostgreSQL as an `IntegrationEvent` with `status: RECEIVED` before responding to the provider. PostgreSQL remains the authoritative durable truth.
+2. **Fast Provider Response & Best-Effort Wakeup**: The HTTP controller performs signature verification and persistence, returning in `< 20ms`. Background processing is initiated via a best-effort `setImmediate` callback for minimal latency, while the durable background recovery scanner guarantees processing across process crashes and restarts.
+3. **Database-Enforced Deduplication & Stranded Recovery**: A unique constraint `@@unique([integrationId, providerEventId])` guarantees that identical events deliver exactly one database row. Concurrent duplicates return `200 OK` with `{ status: 'ignored_duplicate' }` and create zero duplicate side effects. If an existing event is in `RECEIVED` or stale `PROCESSING`, duplicate deliveries safely acknowledge the provider while triggering background processing to recover the stranded row.
 4. **Commit-Then-Response-Loss Safety**: If a provider commits an event but disconnects before receiving the response, the subsequent retry is recognized by `providerEventId` and acknowledged safely.
 
 ---
 
-## 5. Processing Model & Out-of-Order Event Fencing
+## 5. Processing Model, Lifecycle & Atomic Claiming
 
-- **At-Least-Once Processing**: Reloop embraces an at-least-once event delivery model paired with idempotent external state projection.
+- **Durable At-Least-Once Processing with Idempotent Downstream Effects**: Reloop guarantees durable at-least-once event delivery paired with idempotent external state projections (`ExternalOrder`, `ExternalReference`) and advisory-locked `RecoveryCase` creation.
+- **State Machine Lifecycle**:
+  ```
+  RECEIVED ──(atomic claim)──► PROCESSING ──(success)──────► PROCESSED
+                                   │
+                                   ├──(malformed payload)──► FAILED (terminal)
+                                   │
+                                   └──(process crash)──────► Stale PROCESSING ──(reclaimed after timeout)──► PROCESSING
+  ```
+- **Database-Atomic CAS Claim**:
+  - Processing claims are guarded at the database layer via atomic conditional updates (`WHERE id = :id AND (status = 'RECEIVED' OR (status = 'PROCESSING' AND updated_at < :staleThreshold))`).
+  - Exactly one processor or API replica successfully claims an eligible event. Concurrent attempts observe `count == 0` and safely yield without duplicate execution.
+- **Stale Event Recovery Scanner**:
+  - In production, `WebhookEventProcessorService` runs a continuous background scanner loop started during API bootstrap (`onModuleInit`) and gracefully terminated during shutdown (`onModuleDestroy`).
+  - The scanner queries indexed predicates on `(status, created_at)` and `(status, updated_at)`.
+  - Stranded `RECEIVED` events and crashed `PROCESSING` events exceeding the stale threshold (default 60s) are automatically recovered. Actively running tasks are protected from premature stealing.
+- **Permanent Failure Handling**:
+  - Events with malformed or invalid payloads transition to `status: FAILED` with `errorCode: 'MALFORMED_PAYLOAD'`. FAILED events are terminal by design and excluded from subsequent scanner ticks to prevent infinite retry loops.
 - **Out-of-Order Guard**: Each event includes an `occurredAt` timestamp. When projecting state to `ExternalOrder`:
   - If `existingOrder.lastObservedAt > event.occurredAt`, the event is recognized as stale/out-of-order.
   - The older event is marked `PROCESSED` with note `SUPERSEDED_BY_NEWER_STATE`.
