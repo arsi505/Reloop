@@ -16,16 +16,16 @@ import {
   WebhookAdapter,
   NormalizedWebhookEvent,
 } from '@reloop/integration-sdk';
-import { SimulatorWebhookAdapter } from '@reloop/connector-simulator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TargetedReconciliationService } from './targeted-reconciliation.service';
+import { WebhookAdapterRegistry } from './webhook-adapter.registry';
 
 @Injectable()
 export class WebhookEventProcessorService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(WebhookEventProcessorService.name);
-  private readonly adapters = new Map<string, WebhookAdapter>();
+  private readonly adapterRegistry: WebhookAdapterRegistry;
 
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -39,12 +39,9 @@ export class WebhookEventProcessorService
     private readonly prisma: PrismaService,
     private readonly targetedReconciliation: TargetedReconciliationService,
     @Optional() private readonly configService?: ConfigService,
+    @Optional() adapterRegistry?: WebhookAdapterRegistry,
   ) {
-    const simulatorAdapter = new SimulatorWebhookAdapter();
-    this.adapters.set('SIMULATOR', simulatorAdapter);
-    this.adapters.set('SHOPIFY', simulatorAdapter);
-    this.adapters.set('SHIPSTATION', simulatorAdapter);
-    this.adapters.set('GENERIC_3PL', simulatorAdapter);
+    this.adapterRegistry = adapterRegistry ?? new WebhookAdapterRegistry();
 
     if (this.configService) {
       const nodeEnv = this.configService.get<string>('nodeEnv');
@@ -116,12 +113,7 @@ export class WebhookEventProcessorService
   private readonly inFlight = new Map<string, Promise<IntegrationEvent>>();
 
   getAdapter(provider: string): WebhookAdapter {
-    const adapter = this.adapters.get(provider.toUpperCase());
-    if (!adapter) {
-      // Default to simulator adapter for now
-      return this.adapters.get('SIMULATOR')!;
-    }
-    return adapter;
+    return this.adapterRegistry.getAdapter(provider);
   }
 
   /**
@@ -197,7 +189,21 @@ export class WebhookEventProcessorService
       throw new Error(`IntegrationEvent ${eventId} not found`);
     }
 
-    const adapter = this.getAdapter(event.integration.provider);
+    let adapter: WebhookAdapter;
+    try {
+      adapter = this.getAdapter(event.integration.provider);
+    } catch (err: any) {
+      this.logger.warn(`Unsupported provider for event ${eventId}: ${err.message}`);
+      return this.prisma.integrationEvent.update({
+        where: { id: eventId },
+        data: {
+          status: IntegrationEventStatus.FAILED,
+          errorCode: 'UNSUPPORTED_PROVIDER',
+          errorMessage: err.message || `Unsupported webhook provider: ${event.integration.provider}`,
+          processedAt: new Date(),
+        },
+      });
+    }
 
     let normalized: NormalizedWebhookEvent | null = null;
     try {

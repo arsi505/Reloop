@@ -4,16 +4,19 @@ import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
 import { WebhookEventProcessorService } from './webhook-event-processor.service';
 import { TargetedReconciliationService } from './targeted-reconciliation.service';
+import { WebhookAdapterRegistry } from './webhook-adapter.registry';
 
 @Module({
   imports: [PrismaModule],
   controllers: [WebhooksController],
   providers: [
+    WebhookAdapterRegistry,
     WebhooksService,
     WebhookEventProcessorService,
     TargetedReconciliationService,
   ],
   exports: [
+    WebhookAdapterRegistry,
     WebhooksService,
     WebhookEventProcessorService,
     TargetedReconciliationService,

@@ -5,20 +5,20 @@ import {
   NotFoundException,
   PayloadTooLargeException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, IntegrationEventStatus } from '@reloop/database';
 import { WebhookAdapter } from '@reloop/integration-sdk';
-import { SimulatorWebhookAdapter } from '@reloop/connector-simulator';
-import { ShopifyWebhookAdapter } from '@reloop/connector-shopify';
 import { PrismaService } from '../prisma/prisma.service';
 import { WebhookEventProcessorService } from './webhook-event-processor.service';
 import { WebhookIngestResponseDto } from './dto/webhook-response.dto';
+import { WebhookAdapterRegistry } from './webhook-adapter.registry';
 
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
-  private readonly adapters = new Map<string, WebhookAdapter>();
+  private readonly adapterRegistry: WebhookAdapterRegistry;
   private readonly maxPayloadBytes: number;
   private readonly defaultSecret: string;
   private readonly shopifyClientSecret: string;
@@ -28,14 +28,9 @@ export class WebhooksService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly processor: WebhookEventProcessorService,
+    @Optional() adapterRegistry?: WebhookAdapterRegistry,
   ) {
-    const simulatorAdapter = new SimulatorWebhookAdapter();
-    const shopifyAdapter = new ShopifyWebhookAdapter();
-
-    this.adapters.set('SIMULATOR', simulatorAdapter);
-    this.adapters.set('SHOPIFY', shopifyAdapter);
-    this.adapters.set('SHIPSTATION', simulatorAdapter);
-    this.adapters.set('GENERIC_3PL', simulatorAdapter);
+    this.adapterRegistry = adapterRegistry ?? new WebhookAdapterRegistry();
 
     this.maxPayloadBytes =
       this.configService.get<number>('webhookMaxPayloadBytes') || 1048576; // 1MB
@@ -52,11 +47,7 @@ export class WebhooksService {
   }
 
   getAdapter(provider: string): WebhookAdapter {
-    const adapter = this.adapters.get(provider.toUpperCase());
-    if (!adapter) {
-      throw new BadRequestException(`Unsupported webhook provider: ${provider}`);
-    }
-    return adapter;
+    return this.adapterRegistry.getAdapter(provider);
   }
 
   private getHeader(

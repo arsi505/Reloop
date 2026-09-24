@@ -226,6 +226,10 @@ describe('E-02: Durable Webhook Processing & Recovery Specification', () => {
         where: { organizationId: orgId, externalOrderNumber: orderNumber },
       });
       expect(orderCount).toBe(1);
+
+      // Clean up active event and restore stale threshold
+      await prisma.integrationEvent.delete({ where: { id: activeEvent.id } });
+      processor.setStaleThresholdMs(1000);
     });
   });
 

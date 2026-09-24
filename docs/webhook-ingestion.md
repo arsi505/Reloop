@@ -138,3 +138,15 @@ External Provider / Simulator Webhook
 >
 > Recovery strictly follows the canonical architectural chain:
 > `Webhook -> IntegrationEvent -> State Projection -> Targeted Reconciliation -> RecoveryCase -> Day 13 Policy Router -> CHECK -> (APPROVAL) -> EXECUTE -> VERIFY -> RESOLVED`.
+
+---
+
+## 8. Provider Normalization Adapter Registry (E-03 Remediation)
+
+- **Shared Adapter Registry**: `WebhookAdapterRegistry` provides centralized, explicit mapping of provider keys to specialized normalization adapters across both ingestion and durable background processing:
+  - `SHOPIFY` → `ShopifyWebhookAdapter`: Normalizes Shopify-specific payload schemas (numeric `order_number`, snake_case fields such as `admin_graphql_api_id`, `line_items`, `fulfillment_status`, and `total_price`).
+  - `SIMULATOR` → `SimulatorWebhookAdapter`: Normalizes simulator-shaped payloads (`orderNumber` as string, camelCase fields).
+  - `SHIPSTATION` & `GENERIC_3PL` → Mapped explicitly to standard connector adapters.
+  - Unknown providers fail explicitly with `BadRequestException` on ingestion and transition to terminal `FAILED` (`UNSUPPORTED_PROVIDER`) in the durable recovery processor without falling back to simulator.
+- **Provider Mutation Guards**: Webhook ingestion and normalization remain strictly read-only projections. External API mutation guards remain active and enforced.
+- **Live Provider Smoke Status**: Synthetic and sandbox fixtures are thoroughly verified in automated suites. Live Shopify provider validation with production credentials remains classified as `NOT_RUN`.
