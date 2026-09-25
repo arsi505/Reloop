@@ -15,10 +15,9 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
 import { EmptyState } from '../ui/EmptyState';
+import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
 import {
   SearchIcon,
-  FilterIcon,
-  RefreshIcon,
   ArrowRightIcon,
   RecoveriesIcon,
 } from '../icons/Icons';
@@ -112,29 +111,18 @@ export const RecoveriesView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="operations-view mx-auto max-w-[1440px] space-y-7">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#18181b]">
-            Automated Recoveries
-          </h1>
-          <p className="text-xs text-[#71717a] mt-0.5">
-            Durable workflow execution logs, approval gates, and verified resolutions.
-          </p>
-        </div>
-        <button
-          onClick={() => fetchRecoveries()}
-          disabled={isLoading}
-          className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#ececeb] text-xs font-medium text-[#18181b] hover:bg-[#fbfbfa] shadow-subtle transition-colors disabled:opacity-50"
-        >
-          <RefreshIcon size={12} className={isLoading ? 'animate-spin' : ''} />
-          <span>Refresh</span>
-        </button>
-      </div>
+      <OperationalPageHeader
+        index="04"
+        eyebrow="DURABLE EXECUTION / EVIDENCE LOG"
+        title="Recovery cases."
+        description="Every workflow, approval gate, and verified resolution in one inspectable operating record."
+        actions={<RefreshControl loading={isLoading} onClick={fetchRecoveries} />}
+      />
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+      <div className="operations-toolbar flex flex-col items-stretch gap-3 border border-reloop-line bg-reloop-surface p-3.5 sm:flex-row sm:items-center">
         {/* Search */}
         <div className="relative flex-1">
           <SearchIcon
@@ -182,7 +170,7 @@ export const RecoveriesView: React.FC = () => {
       </div>
 
       {/* Main Table Surface */}
-      <div className="rounded-xl bg-white border border-[#ececeb] shadow-subtle overflow-hidden">
+      <div className="operations-table overflow-hidden border border-reloop-line bg-reloop-surface">
         {error ? (
           <div className="p-6">
             <ErrorState

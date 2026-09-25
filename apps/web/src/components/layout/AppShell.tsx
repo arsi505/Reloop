@@ -5,33 +5,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/auth-context';
 import { useRealtimeStatus } from '../../context/realtime-context';
+import { BrandLockup } from '../brand/BrandLockup';
 import {
-  ReloopLogo,
-  DashboardIcon,
-  ExceptionsIcon,
-  OrdersIcon,
-  RecoveriesIcon,
-  IntegrationsIcon,
-  HealthIcon,
-  RulesIcon,
-  AnalyticsIcon,
-  SettingsIcon,
-  SearchIcon,
-  BellIcon,
-  ChevronDownIcon,
-  XIcon,
+  DashboardIcon, ExceptionsIcon, OrdersIcon, RecoveriesIcon, IntegrationsIcon,
+  HealthIcon, RulesIcon, AnalyticsIcon, SettingsIcon, SearchIcon, BellIcon,
+  ChevronDownIcon, XIcon,
 } from '../icons/Icons';
 
-export type NavTab =
-  | 'dashboard'
-  | 'exceptions'
-  | 'orders'
-  | 'recoveries'
-  | 'integrations'
-  | 'health'
-  | 'rules'
-  | 'analytics'
-  | 'settings';
+export type NavTab = 'dashboard' | 'exceptions' | 'orders' | 'recoveries' | 'integrations' | 'health' | 'rules' | 'analytics' | 'settings';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -39,11 +20,22 @@ interface AppShellProps {
   openExceptionsCount?: number;
 }
 
-export function AppShell({
-  children,
-  activeTab,
-  openExceptionsCount = 0,
-}: AppShellProps) {
+type NavigationItem = {
+  id: NavTab;
+  label: string;
+  href: string;
+  code: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  badge?: number;
+};
+
+const pageLabels: Record<NavTab, string> = {
+  dashboard: 'Operations overview', exceptions: 'Exception queue', orders: 'Order records',
+  recoveries: 'Recovery cases', integrations: 'Connected systems', health: 'System health',
+  rules: 'Rules & logic', analytics: 'Analytics', settings: 'Settings',
+};
+
+export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppShellProps) {
   const { user, organization, role, logout } = useAuth();
   const realtimeStatus = useRealtimeStatus();
   const router = useRouter();
@@ -53,241 +45,111 @@ export function AppShell({
   const [infoModal, setInfoModal] = useState<{ title: string; desc: string } | null>(null);
 
   const initials = user?.name
-    ? user.name
-        .split(' ')
-        .map((n) => n[0])
-        .join('')
-        .slice(0, 2)
-        .toUpperCase()
+    ? user.name.split(' ').map((name) => name[0]).join('').slice(0, 2).toUpperCase()
     : 'OP';
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      router.push(`/exceptions?search=${encodeURIComponent(searchQuery.trim())}`);
-    }
+  const handleSearchSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (searchQuery.trim()) router.push(`/exceptions?search=${encodeURIComponent(searchQuery.trim())}`);
   };
 
-  const navItems: {
-    id: NavTab;
-    label: string;
-    href: string;
-    icon: React.ComponentType<{ size?: number; className?: string }>;
-    badge?: number;
-  }[] = [
-    { id: 'dashboard', label: 'Dashboard', href: '/dashboard', icon: DashboardIcon },
-    {
-      id: 'exceptions',
-      label: 'Exceptions',
-      href: '/exceptions',
-      icon: ExceptionsIcon,
-      badge: openExceptionsCount > 0 ? openExceptionsCount : undefined,
-    },
-    { id: 'orders', label: 'Orders', href: '/orders', icon: OrdersIcon },
-    { id: 'recoveries', label: 'Recoveries', href: '/recoveries', icon: RecoveriesIcon },
-    { id: 'integrations', label: 'Integrations', href: '/integrations', icon: IntegrationsIcon },
-    { id: 'health', label: 'System Health', href: '/health', icon: HealthIcon },
+  const navItems: NavigationItem[] = [
+    { id: 'dashboard', label: 'Overview', href: '/dashboard', code: '01', icon: DashboardIcon },
+    { id: 'exceptions', label: 'Exceptions', href: '/exceptions', code: '02', icon: ExceptionsIcon, badge: openExceptionsCount || undefined },
+    { id: 'orders', label: 'Orders', href: '/orders', code: '03', icon: OrdersIcon },
+    { id: 'recoveries', label: 'Recoveries', href: '/recoveries', code: '04', icon: RecoveriesIcon },
+    { id: 'integrations', label: 'Integrations', href: '/integrations', code: '05', icon: IntegrationsIcon },
+    { id: 'health', label: 'System health', href: '/health', code: '06', icon: HealthIcon },
   ];
 
-  const secondaryNavItems: {
-    id: NavTab;
-    label: string;
-    badgeText: string;
-    description: string;
-    icon: React.ComponentType<{ size?: number; className?: string }>;
-  }[] = [
-    {
-      id: 'rules',
-      label: 'Rules & Logic',
-      badgeText: 'Enterprise',
-      description: 'Automated reconciliation rules and match tolerances are provisioned via organization policy contracts.',
-      icon: RulesIcon,
-    },
-    {
-      id: 'analytics',
-      label: 'Analytics',
-      badgeText: 'Coming Soon',
-      description: 'Historical recovery trends, prevented refund cost savings, and SLA metrics launching in upcoming release.',
-      icon: AnalyticsIcon,
-    },
-    {
-      id: 'settings',
-      label: 'Settings',
-      badgeText: 'Config',
-      description: 'Multi-tenant organization security, SSO, and team roles are managed through authenticated admin APIs.',
-      icon: SettingsIcon,
-    },
+  const secondaryNavItems = [
+    { id: 'rules' as const, label: 'Rules & logic', badge: 'POLICY', description: 'Automated reconciliation rules and match tolerances are provisioned through organization policy contracts.', icon: RulesIcon },
+    { id: 'analytics' as const, label: 'Analytics', badge: 'SOON', description: 'Historical recovery trends, prevented refund cost, and SLA metrics are in the upcoming release.', icon: AnalyticsIcon },
+    { id: 'settings' as const, label: 'Settings', badge: 'ADMIN', description: 'Organization security, SSO, and team roles are managed through authenticated administration APIs.', icon: SettingsIcon },
   ];
 
-  const renderSidebarContent = () => (
-    <div className="flex flex-col justify-between h-full">
-      <div>
-        {/* Brand Header */}
-        <div className="h-16 px-5 flex items-center gap-3 border-b border-[#ececeb]/80">
-          <ReloopLogo size={28} />
-          <div className="flex flex-col">
-            <span className="font-semibold text-[15px] tracking-tight text-[#18181b] leading-tight">
-              Reloop
-            </span>
-            <span className="text-[11px] text-[#71717a] font-medium leading-none">
-              Reliability Engine
-            </span>
-          </div>
+  const closeMobileNavigation = () => setMobileMenuOpen(false);
+
+  const sidebarContent = (
+    <div className="relative flex h-full flex-col bg-reloop-ink text-reloop-paper">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.035] brand-grid" />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className="border-b border-white/10 px-6 py-6">
+          <Link href="/dashboard" aria-label="Reloop operations overview"><BrandLockup tone="light" size="default" priority /></Link>
         </div>
 
-        {/* Tenant / Workspace Selector */}
-        <div className="px-3 pt-3 pb-2">
-          <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-white border border-[#ececeb] shadow-subtle hover:border-[#d4d4d8] cursor-pointer transition-colors">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="w-5 h-5 rounded bg-[#f4f4f5] text-[#18181b] font-semibold text-[11px] flex items-center justify-center shrink-0 border border-[#e4e4e7]">
-                {organization?.name ? organization.name.charAt(0).toUpperCase() : 'O'}
-              </div>
-              <div className="truncate">
-                <p className="text-xs font-medium text-[#18181b] truncate">
-                  {organization?.name || 'My Organization'}
-                </p>
-              </div>
-            </div>
-            <ChevronDownIcon size={12} className="text-[#71717a] shrink-0" />
-          </div>
+        <div className="px-4 py-4">
+          <button type="button" className="flex w-full items-center justify-between border border-white/10 bg-white/[0.035] px-3.5 py-3 text-left transition-colors hover:bg-white/[0.06]">
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-reloop-signal text-xs font-bold text-white">{organization?.name?.charAt(0).toUpperCase() || 'O'}</span>
+              <span className="min-w-0">
+                <span className="brand-data block text-[7px] tracking-[0.16em] text-[#777970]">ACTIVE WORKSPACE</span>
+                <span className="mt-1 block truncate text-xs font-semibold text-reloop-paper">{organization?.name || 'My Organization'}</span>
+              </span>
+            </span>
+            <ChevronDownIcon size={12} className="shrink-0 text-[#777970]" />
+          </button>
         </div>
 
-        {/* Primary Navigation */}
-        <nav className="px-3 py-2 space-y-1">
-          <div className="px-3 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-[#a1a1aa]">
-            Operations
-          </div>
-          {navItems.map((item) => {
-            const isActive = activeTab === item.id;
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.id}
-                href={item.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-all group relative ${
-                  isActive
-                    ? 'bg-white text-[#18181b] shadow-subtle border border-[#ececeb]'
-                    : 'text-[#52525b] hover:bg-[#f4f4f5]/80 hover:text-[#18181b]'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  {isActive && (
-                    <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-[#f95721]" />
-                  )}
-                  <Icon
-                    size={16}
-                    className={
-                      isActive
-                        ? 'text-[#f95721]'
-                        : 'text-[#71717a] group-hover:text-[#18181b]'
-                    }
-                  />
-                  <span>{item.label}</span>
-                </div>
-
-                {item.badge !== undefined && (
-                  <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-[#fff5f1] text-[#f95721] border border-[#ffdcd0]">
-                    {item.badge}
+        <nav className="px-4 pb-4" aria-label="Operations">
+          <p className="brand-data px-3 pb-2 pt-1 text-[8px] font-semibold tracking-[0.18em] text-[#666860]">OPERATIONS</p>
+          <div className="space-y-1">
+            {navItems.map((item) => {
+              const active = activeTab === item.id;
+              const Icon = item.icon;
+              return (
+                <Link key={item.id} href={item.href} onClick={closeMobileNavigation} className={`group relative flex min-h-10 items-center justify-between px-3 text-[13px] transition-colors ${active ? 'bg-white/[0.08] text-white' : 'text-[#a7a99f] hover:bg-white/[0.045] hover:text-white'}`}>
+                  {active && <span className="absolute inset-y-0 left-0 w-[3px] bg-reloop-signal" />}
+                  <span className="flex items-center gap-3">
+                    <span className={`brand-data w-4 text-[8px] ${active ? 'text-reloop-signal' : 'text-[#5f615a]'}`}>{item.code}</span>
+                    <Icon size={15} className={active ? 'text-reloop-paper' : 'text-[#777970] group-hover:text-reloop-paper'} />
+                    <span className="font-medium">{item.label}</span>
                   </span>
-                )}
-              </Link>
-            );
-          })}
+                  {item.badge !== undefined && <span className="brand-data min-w-5 bg-reloop-signal px-1.5 py-0.5 text-center text-[8px] font-semibold text-white">{item.badge}</span>}
+                </Link>
+              );
+            })}
+          </div>
         </nav>
 
-        {/* Separator */}
-        <div className="px-4 py-2">
-          <div className="border-t border-[#ececeb]" />
-        </div>
+        <div className="mx-4 border-t border-white/10" />
 
-        {/* Secondary Navigation */}
-        <nav className="px-3 py-1 space-y-1">
-          <div className="px-3 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-[#a1a1aa]">
-            Configuration
+        <nav className="px-4 py-4" aria-label="Configuration">
+          <p className="brand-data px-3 pb-2 pt-1 text-[8px] font-semibold tracking-[0.18em] text-[#666860]">CONFIGURATION</p>
+          <div className="space-y-1">
+            {secondaryNavItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button key={item.id} type="button" onClick={() => { closeMobileNavigation(); setInfoModal({ title: item.label, desc: item.description }); }} className="group flex min-h-10 w-full items-center justify-between px-3 text-[13px] text-[#8f9189] transition-colors hover:bg-white/[0.045] hover:text-white">
+                  <span className="flex items-center gap-3"><span className="brand-data w-4 text-[8px] text-[#555750]">—</span><Icon size={15} className="text-[#666860] group-hover:text-reloop-paper" /><span>{item.label}</span></span>
+                  <span className="brand-data text-[7px] tracking-[0.08em] text-[#666860]">{item.badge}</span>
+                </button>
+              );
+            })}
           </div>
-          {secondaryNavItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setInfoModal({ title: item.label, desc: item.description });
-                }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-all group relative text-[#52525b] hover:bg-[#f4f4f5]/80 hover:text-[#18181b]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Icon
-                    size={16}
-                    className="text-[#71717a] group-hover:text-[#18181b]"
-                  />
-                  <span>{item.label}</span>
-                </div>
-                <span className="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-[#f4f4f5] text-[#71717a] border border-[#e4e4e7]">
-                  {item.badgeText}
-                </span>
-              </button>
-            );
-          })}
         </nav>
       </div>
 
-      {/* Bottom Section: Promo/Status Card & User Profile */}
-      <div className="p-3 space-y-3">
-        {/* Recovery Active Card */}
-        <div className="p-3 rounded-lg bg-white border border-[#ececeb] shadow-subtle">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold text-[#18181b] uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#10b981] animate-pulse" />
-              Live Protection
-            </span>
-            <span className="text-[10px] text-[#71717a]">v0.1.0</span>
+      <div className="relative border-t border-white/10 p-4">
+        <div className="mb-3 border border-white/10 bg-white/[0.035] p-3.5">
+          <div className="flex items-center justify-between">
+            <span className="brand-data flex items-center gap-2 text-[8px] font-semibold tracking-[0.12em] text-[#a7a99f]"><span className="h-1.5 w-1.5 bg-reloop-verified motion-breathe" />LIVE PROTECTION</span>
+            <span className="brand-data text-[7px] text-[#5f615a]">V0.1.0</span>
           </div>
-          <p className="text-[11px] text-[#71717a] leading-relaxed">
-            Read-only cross-system integrity monitoring is active.
-          </p>
+          <p className="mt-2 text-[11px] leading-5 text-[#777970]">Cross-system integrity monitoring is active.</p>
         </div>
-
-        {/* User Account / Role Row */}
         <div className="relative">
-          <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
-            className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-white hover:shadow-subtle hover:border hover:border-[#ececeb] transition-all"
-          >
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="w-8 h-8 rounded-full bg-[#fff0eb] text-[#f95721] font-semibold text-xs flex items-center justify-center shrink-0 border border-[#ffdcd0]">
-                {initials}
-              </div>
-              <div className="text-left truncate">
-                <p className="text-xs font-semibold text-[#18181b] truncate">
-                  {user?.name || 'Operator'}
-                </p>
-                <p className="text-[11px] text-[#71717a] truncate">
-                  {role || 'VIEWER'}
-                </p>
-              </div>
-            </div>
-            <ChevronDownIcon size={12} className="text-[#71717a] shrink-0" />
+          <button onClick={() => setShowUserMenu((visible) => !visible)} className="flex w-full items-center justify-between px-1 py-2 text-left">
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-reloop-signal/50 bg-reloop-signal/10 text-xs font-semibold text-reloop-signal">{initials}</span>
+              <span className="min-w-0"><span className="block truncate text-xs font-semibold text-reloop-paper">{user?.name || 'Operator'}</span><span className="brand-data mt-1 block text-[8px] tracking-[0.1em] text-[#666860]">{role || 'VIEWER'}</span></span>
+            </span>
+            <ChevronDownIcon size={12} className="text-[#666860]" />
           </button>
-
-          {/* Dropdown Menu */}
           {showUserMenu && (
-            <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-lg border border-[#ececeb] shadow-lg py-1 text-xs z-30 animate-fadeIn">
-              <div className="px-3 py-2 border-b border-[#ececeb]">
-                <p className="font-medium text-[#18181b]">{user?.name}</p>
-                <p className="text-[#71717a] font-mono text-[10px] truncate">{user?.email}</p>
-              </div>
-              <button
-                onClick={() => {
-                  setShowUserMenu(false);
-                  logout();
-                }}
-                className="w-full text-left px-3 py-2 text-[#b91c1c] hover:bg-[#fef2f2]"
-              >
-                Sign Out
-              </button>
+            <div className="absolute bottom-full left-0 right-0 z-30 mb-2 border border-white/10 bg-[#24251f] p-1 shadow-elevated">
+              <div className="border-b border-white/10 px-3 py-2"><p className="truncate text-xs font-medium">{user?.email}</p></div>
+              <button onClick={() => { setShowUserMenu(false); logout(); }} className="mt-1 w-full px-3 py-2 text-left text-xs text-[#ff8e73] hover:bg-white/[0.05]">Sign out</button>
             </div>
           )}
         </div>
@@ -296,157 +158,56 @@ export function AppShell({
   );
 
   return (
-    <div className="min-h-screen bg-[#fbfbfa] text-[#18181b] flex font-sans antialiased selection:bg-[#fff0eb] selection:text-[#f95721]">
-      {/* Desktop Left Sidebar (hidden on mobile) */}
-      <aside className="hidden md:flex w-64 bg-[#fbfbfa] border-r border-[#ececeb] flex-col justify-between shrink-0 select-none z-20 sticky top-0 h-screen">
-        {renderSidebarContent()}
-      </aside>
-
-      {/* Mobile Slide-over Sidebar Drawer */}
+    <div className="flex min-h-screen bg-reloop-canvas font-sans text-reloop-ink antialiased selection:bg-reloop-signal-soft selection:text-reloop-signal-hover">
+      <aside className="sticky top-0 z-20 hidden h-screen w-[276px] shrink-0 md:block">{sidebarContent}</aside>
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 md:hidden flex">
-          <div
-            className="fixed inset-0 bg-black/25 backdrop-blur-sm"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          <div className="relative w-64 bg-[#fbfbfa] h-full shadow-2xl z-10 flex flex-col justify-between">
-            {renderSidebarContent()}
-          </div>
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          <button aria-label="Close navigation menu" className="fixed inset-0 bg-reloop-ink/55 backdrop-blur-sm" onClick={closeMobileNavigation} />
+          <div className="relative z-10 h-full w-[286px] shadow-elevated">{sidebarContent}</div>
         </div>
       )}
 
-      {/* Main Column */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
-        {/* Top Header Bar */}
-        <header className="h-16 bg-white border-b border-[#ececeb] px-4 sm:px-6 flex items-center justify-between shrink-0 sticky top-0 z-10">
-          <div className="flex items-center gap-3">
-            {/* Mobile Hamburger Menu Button */}
-            <button
-              onClick={() => setMobileMenuOpen(true)}
-              className="md:hidden p-1.5 rounded-lg text-[#71717a] hover:text-[#18181b] hover:bg-[#f4f4f5]"
-              aria-label="Open navigation menu"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="18" x2="21" y2="18" />
-              </svg>
-            </button>
-
-            <h1 className="text-base font-semibold text-[#18181b] tracking-tight capitalize">
-              {activeTab === 'dashboard' ? 'Operations Overview' : activeTab}
-            </h1>
-            <span className="text-xs text-[#a1a1aa] hidden sm:inline">/</span>
-            <span className="text-xs text-[#71717a] font-medium hidden sm:inline">
-              {organization?.name || 'Production'}
-            </span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-10 flex h-[68px] shrink-0 items-center justify-between border-b border-reloop-line bg-reloop-paper/95 px-4 backdrop-blur-md sm:px-7">
+          <div className="flex min-w-0 items-center gap-3">
+            <button onClick={() => setMobileMenuOpen(true)} className="flex h-9 w-9 items-center justify-center border border-reloop-line text-reloop-muted md:hidden" aria-label="Open navigation menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>
+            <div className="min-w-0">
+              <p className="brand-data text-[8px] font-semibold tracking-[0.16em] text-reloop-signal-hover">OPERATIONS / {activeTab.toUpperCase()}</p>
+              <h1 className="mt-1 truncate text-sm font-semibold tracking-[-0.02em]">{pageLabels[activeTab]}</h1>
+            </div>
+            <span className="hidden h-7 w-px bg-reloop-line sm:block" />
+            <span className="hidden truncate text-xs text-reloop-muted sm:block">{organization?.name || 'Production workspace'}</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Realtime Live Engine Status Indicator */}
-            <div
-              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
-                realtimeStatus === 'CONNECTED'
-                  ? 'bg-[#ecfdf5] text-[#065f46] border-[#a7f3d0]'
-                  : realtimeStatus === 'RECONNECTING'
-                  ? 'bg-[#fffbeb] text-[#92400e] border-[#fde68a]'
-                  : 'bg-[#f4f4f5] text-[#71717a] border-[#e4e4e7]'
-              }`}
-              title={
-                realtimeStatus === 'CONNECTED'
-                  ? 'Realtime engine connected: live operations active'
-                  : realtimeStatus === 'RECONNECTING'
-                  ? 'Realtime engine reconnecting...'
-                  : 'Realtime engine offline'
-              }
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  realtimeStatus === 'CONNECTED'
-                    ? 'bg-[#10b981] animate-pulse'
-                    : realtimeStatus === 'RECONNECTING'
-                    ? 'bg-[#f59e0b] animate-ping'
-                    : 'bg-[#9ca3af]'
-                }`}
-              />
-              <span>
-                {realtimeStatus === 'CONNECTED'
-                  ? 'Live'
-                  : realtimeStatus === 'RECONNECTING'
-                  ? 'Reconnecting'
-                  : 'Offline'}
-              </span>
+          <div className="flex items-center gap-2.5">
+            <div className={`hidden items-center gap-2 border px-2.5 py-1.5 brand-data text-[8px] font-semibold tracking-[0.1em] sm:flex ${realtimeStatus === 'CONNECTED' ? 'border-reloop-verified/25 bg-reloop-verified-soft text-reloop-verified' : realtimeStatus === 'RECONNECTING' ? 'border-reloop-warning/25 bg-reloop-warning-soft text-reloop-warning' : 'border-reloop-line bg-reloop-surface text-reloop-faint'}`}>
+              <span className={`h-1.5 w-1.5 ${realtimeStatus === 'CONNECTED' ? 'bg-reloop-verified motion-breathe' : realtimeStatus === 'RECONNECTING' ? 'bg-reloop-warning animate-pulse' : 'bg-reloop-faint'}`} />
+              {realtimeStatus === 'CONNECTED' ? 'LIVE' : realtimeStatus === 'RECONNECTING' ? 'SYNCING' : 'OFFLINE'}
             </div>
-
-            {/* Search Input Form */}
-            <form onSubmit={handleSearchSubmit} className="relative w-44 sm:w-64">
-              <SearchIcon
-                size={14}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a1a1aa]"
-              />
-              <input
-                type="text"
-                placeholder="Search orders, exceptions..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-10 py-1.5 text-xs bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-[#18181b] placeholder-[#a1a1aa] focus:outline-none focus:bg-white focus:border-[#d4d4d8] transition-colors"
-              />
-              <button
-                type="submit"
-                className="absolute right-2 top-1/2 -translate-y-1/2 px-1 py-0.5 text-[10px] font-mono text-[#a1a1aa] hover:text-[#18181b]"
-              >
-                ↵
-              </button>
+            <form onSubmit={handleSearchSubmit} className="relative hidden w-48 lg:block xl:w-64">
+              <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-reloop-faint" />
+              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search operational records" className="h-9 w-full border border-reloop-line bg-reloop-surface pl-9 pr-9 text-xs outline-none transition-colors placeholder:text-reloop-faint focus:border-reloop-line-strong" />
+              <span className="brand-data absolute right-3 top-1/2 -translate-y-1/2 text-[8px] text-reloop-faint">↵</span>
             </form>
-
-            {/* Notification Bell */}
-            <button
-              title="Notifications"
-              className="relative p-2 rounded-lg text-[#71717a] hover:text-[#18181b] hover:bg-[#f4f4f5] border border-transparent hover:border-[#ececeb] transition-all"
-            >
-              <BellIcon size={16} />
-              {openExceptionsCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#f95721] ring-2 ring-white" />
-              )}
+            <button title="Notifications" className="relative flex h-9 w-9 items-center justify-center border border-reloop-line bg-reloop-surface text-reloop-muted transition-colors hover:border-reloop-line-strong hover:text-reloop-ink">
+              <BellIcon size={15} />
+              {openExceptionsCount > 0 && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 bg-reloop-signal ring-2 ring-reloop-surface" />}
             </button>
-
-            {/* Avatar Circle */}
-            <div className="w-8 h-8 rounded-full bg-[#fff0eb] text-[#f95721] font-semibold text-xs flex items-center justify-center border border-[#ffdcd0]">
-              {initials}
-            </div>
+            <span className="hidden h-9 w-9 items-center justify-center bg-reloop-ink text-[10px] font-semibold text-reloop-paper sm:flex">{initials}</span>
           </div>
         </header>
-
-        {/* Scrollable Main Content Surface */}
-        <main className="flex-1 p-4 sm:p-6 overflow-y-auto">
-          {children}
-        </main>
+        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-7 sm:py-8">{children}</main>
       </div>
 
-      {/* Informational Enterprise / Upcoming Feature Modal */}
       {infoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-xl border border-[#ececeb] shadow-xl max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-[#18181b]">{infoModal.title}</h3>
-              <button
-                onClick={() => setInfoModal(null)}
-                className="p-1 rounded-md text-[#71717a] hover:bg-[#f4f4f5] hover:text-[#18181b]"
-              >
-                <XIcon size={16} />
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-reloop-ink/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md border border-reloop-line bg-reloop-paper shadow-elevated">
+            <div className="flex items-center justify-between border-b border-reloop-line px-6 py-5">
+              <div><p className="brand-data text-[8px] tracking-[0.16em] text-reloop-signal-hover">CONTROL PLANE</p><h3 className="mt-2 font-display text-2xl font-[620] tracking-[-0.04em]">{infoModal.title}</h3></div>
+              <button onClick={() => setInfoModal(null)} className="flex h-8 w-8 items-center justify-center border border-reloop-line text-reloop-muted hover:text-reloop-ink" aria-label="Close"><XIcon size={15} /></button>
             </div>
-            <p className="text-xs text-[#52525b] leading-relaxed">
-              {infoModal.desc}
-            </p>
-            <div className="pt-2 flex justify-end">
-              <button
-                onClick={() => setInfoModal(null)}
-                className="px-4 py-1.5 text-xs font-medium bg-[#18181b] text-white rounded-lg hover:bg-[#27272a] transition-colors"
-              >
-                Understood
-              </button>
-            </div>
+            <p className="px-6 py-6 text-sm leading-7 text-reloop-muted">{infoModal.desc}</p>
+            <div className="flex justify-end border-t border-reloop-line px-6 py-4"><button onClick={() => setInfoModal(null)} className="brand-button bg-reloop-ink text-reloop-paper">Understood</button></div>
           </div>
         </div>
       )}

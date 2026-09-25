@@ -17,10 +17,10 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
 import { EmptyState } from '../ui/EmptyState';
+import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
 import {
   ProviderIcon,
   SearchIcon,
-  RefreshIcon,
   ChevronDownIcon,
 } from '../icons/Icons';
 
@@ -155,40 +155,28 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
   };
 
   return (
-    <div className="space-y-6 max-w-[1440px] mx-auto">
+    <div className="operations-view mx-auto max-w-[1440px] space-y-7">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold tracking-tight text-[#18181b]">
-            Exception Queue
-          </h2>
-          <p className="text-xs text-[#71717a] mt-0.5">
-            Cross-system discrepancies and integrity anomalies detected across your integrated commerce systems.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
+      <OperationalPageHeader
+        index="02"
+        eyebrow="OPERATOR ATTENTION / LIVE QUEUE"
+        title="Exception queue."
+        description="Cross-system discrepancies and integrity anomalies, ordered for clear operator judgment."
+        actions={<>
           {hasActiveFilters && (
             <button
               onClick={handleResetFilters}
-              className="text-xs text-[#f95721] font-medium hover:underline px-2"
+              className="px-2 text-xs font-semibold text-reloop-signal-hover hover:underline"
             >
-              Reset Filters
+              Reset filters
             </button>
           )}
-          <button
-            onClick={fetchExceptions}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-[#fbfbfa] border border-[#ececeb] shadow-subtle text-xs font-medium text-[#18181b] transition-colors"
-          >
-            <RefreshIcon size={12} className={`text-[#71717a] ${loading ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
-          </button>
-        </div>
-      </div>
+          <RefreshControl loading={loading} onClick={fetchExceptions} />
+        </>}
+      />
 
       {/* Filter Toolbar */}
-      <div className="p-3.5 rounded-xl bg-white border border-[#ececeb] shadow-subtle flex flex-wrap items-center gap-3 text-xs">
+      <div className="operations-toolbar flex flex-wrap items-center gap-3 border border-reloop-line bg-reloop-surface p-3.5 text-xs">
         {/* Search Input (Debounced) */}
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon
@@ -315,7 +303,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
 
       {/* Table Card */}
       {!error && (
-        <div className="rounded-xl bg-white border border-[#ececeb] shadow-subtle overflow-hidden">
+        <div className="operations-table overflow-hidden border border-reloop-line bg-reloop-surface">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>

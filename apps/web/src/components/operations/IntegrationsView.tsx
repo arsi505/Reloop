@@ -3,24 +3,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { IntegrationCardDto, IntegrationProvider } from '@reloop/contracts';
-import { apiClient, ApiError } from '../../lib/api-client';
+import { IntegrationCardDto } from '@reloop/contracts';
+import { apiClient } from '../../lib/api-client';
 import { useAuth } from '../../context/auth-context';
 import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
 import { EmptyState } from '../ui/EmptyState';
+import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
 import {
   ProviderIcon,
-  RefreshIcon,
   PlusIcon,
-  ArrowRightIcon,
   AlertTriangleIcon,
   CheckIcon,
   XIcon,
   IntegrationsIcon,
-  ShieldIcon,
 } from '../icons/Icons';
 
 export const IntegrationsView: React.FC = () => {
@@ -178,7 +176,7 @@ export const IntegrationsView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="operations-view mx-auto max-w-[1440px] space-y-7">
       {/* Toast Feedback */}
       {toastMessage && (
         <div
@@ -203,26 +201,13 @@ export const IntegrationsView: React.FC = () => {
       )}
 
       {/* Header & Connection Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#18181b]">
-            Connected Integrations
-          </h1>
-          <p className="text-xs text-[#71717a] mt-0.5">
-            Manage provider credentials, synchronization health, and read-only boundaries.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => fetchIntegrations()}
-            disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#ececeb] text-xs font-medium text-[#18181b] hover:bg-[#fbfbfa] shadow-subtle transition-colors disabled:opacity-50"
-          >
-            <RefreshIcon size={12} className={isLoading ? 'animate-spin' : ''} />
-            <span>Refresh</span>
-          </button>
-
+      <OperationalPageHeader
+        index="05"
+        eyebrow="PROVIDER BOUNDARIES / CREDENTIAL HEALTH"
+        title="Connected systems."
+        description="Provider credentials, synchronization health, and mutation boundaries—visible without exposing secrets."
+        actions={<>
+          <RefreshControl loading={isLoading} onClick={fetchIntegrations} />
           {isOwnerOrAdmin && (
             <>
               <button
@@ -231,7 +216,7 @@ export const IntegrationsView: React.FC = () => {
                   setShopifyError(null);
                   setShowShopifyModal(true);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#5e8e3e] text-white text-xs font-medium hover:bg-[#4d7532] shadow-subtle transition-colors"
+                className="brand-button min-h-10 bg-[#5e8e3e] px-3 text-white hover:bg-[#4d7532]"
               >
                 <PlusIcon size={12} />
                 <span>Connect Shopify</span>
@@ -243,18 +228,18 @@ export const IntegrationsView: React.FC = () => {
                   setShipstationError(null);
                   setShowShipStationModal(true);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0070ba] text-white text-xs font-medium hover:bg-[#005a96] shadow-subtle transition-colors"
+                className="brand-button min-h-10 bg-[#0070ba] px-3 text-white hover:bg-[#005a96]"
               >
                 <PlusIcon size={12} />
                 <span>Connect ShipStation</span>
               </button>
             </>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       {/* Main Table / Surface */}
-      <div className="rounded-xl bg-white border border-[#ececeb] shadow-subtle overflow-hidden">
+      <div className="operations-table overflow-hidden border border-reloop-line bg-reloop-surface">
         {error ? (
           <div className="p-6">
             <ErrorState

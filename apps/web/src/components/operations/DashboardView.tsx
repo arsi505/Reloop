@@ -135,23 +135,23 @@ export function DashboardView({
   const firstName = userName ? userName.split(' ')[0] : 'Operator';
 
   return (
-    <div className="space-y-6 max-w-[1440px] mx-auto">
+    <div className="operations-dashboard mx-auto max-w-[1440px] space-y-7">
       {/* Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold tracking-tight text-[#18181b] flex items-center gap-2">
-            <span>Good morning, {firstName}</span>
-            <span className="text-base">👋</span>
+      <div className="flex flex-col gap-6 border-b border-reloop-line pb-7 sm:flex-row sm:items-end sm:justify-between">
+        <div className="max-w-2xl">
+          <p className="brand-data text-[9px] font-semibold tracking-[0.18em] text-reloop-signal-hover">LIVE OPERATING PICTURE / {firstName.toUpperCase()}</p>
+          <h2 className="mt-3 font-display text-[clamp(2.3rem,4vw,4.15rem)] font-[620] leading-[0.95] tracking-[-0.05em] text-reloop-ink">
+            Keep every order<br className="hidden sm:block" /> in a trusted state.
           </h2>
-          <p className="text-xs text-[#71717a] mt-0.5">
-            Here&apos;s what&apos;s happening with your recovery operations today.
+          <p className="mt-4 max-w-xl text-sm leading-6 text-reloop-muted">
+            Exceptions, approvals, and verified recovery evidence—ordered by what needs operator attention now.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#ececeb] shadow-subtle text-xs text-[#52525b]">
-            <ClockIcon size={12} className="text-[#71717a]" />
-            <span className="font-medium">Live Feed</span>
+        <div className="flex items-center gap-2">
+          <div className="flex min-h-10 items-center gap-2 border border-reloop-line bg-reloop-surface px-3 brand-data text-[8px] font-semibold tracking-[0.11em] text-reloop-muted">
+            <ClockIcon size={13} className="text-reloop-verified" />
+            <span>LIVE FEED</span>
           </div>
           <button
             onClick={() => {
@@ -159,19 +159,19 @@ export function DashboardView({
               fetchQueue(queueFilter);
             }}
             disabled={loadingSummary}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-[#fbfbfa] border border-[#ececeb] shadow-subtle text-xs font-medium text-[#18181b] transition-colors"
+            className="brand-button min-h-10 border border-reloop-line-strong bg-transparent px-3 text-reloop-ink hover:border-reloop-ink"
           >
             <RefreshIcon
               size={12}
-              className={`text-[#71717a] ${loadingSummary ? 'animate-spin' : ''}`}
+              className={`text-reloop-muted ${loadingSummary ? 'animate-spin' : ''}`}
             />
-            <span>Refresh</span>
+            <span>Refresh data</span>
           </button>
         </div>
       </div>
 
       {/* 4 Real Day 17 Metric Cards (Zero fake revenue/recovery rate!) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="dashboard-metrics grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {loadingSummary ? (
           <>
             <MetricCardSkeleton />
@@ -184,7 +184,7 @@ export function DashboardView({
             {/* Card 1: Open Exceptions */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[#71717a]">Open Exceptions</span>
+                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">01 / OPEN EXCEPTIONS</span>
                 <span className="w-2 h-2 rounded-full bg-[#f95721]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -204,7 +204,7 @@ export function DashboardView({
             {/* Card 2: Needs Approval */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[#71717a]">Needs Approval</span>
+                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">02 / NEEDS APPROVAL</span>
                 <span className="w-2 h-2 rounded-full bg-[#f59e0b]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -222,7 +222,7 @@ export function DashboardView({
             {/* Card 3: Blocked Cases */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[#71717a]">Blocked Cases</span>
+                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">03 / BLOCKED CASES</span>
                 <span className="w-2 h-2 rounded-full bg-[#ef4444]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -240,7 +240,7 @@ export function DashboardView({
             {/* Card 4: Resolved Cases */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[#71717a]">Resolved Cases</span>
+                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">04 / RESOLVED CASES</span>
                 <span className="w-2 h-2 rounded-full bg-[#10b981]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -261,7 +261,7 @@ export function DashboardView({
       </div>
 
       {/* Central Grid: Main Left Column (68%) + Right Rail (32%) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="dashboard-layout grid grid-cols-1 gap-6 lg:grid-cols-12">
         {/* Main Left Column (8 cols = 67%) */}
         <div className="lg:col-span-8 space-y-6">
           {/* Active Exception Queue Table */}

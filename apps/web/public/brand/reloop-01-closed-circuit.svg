@@ -1,0 +1,7 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Reloop Closed Circuit logo concept</title>
+  <path d="M24 78V25H51C67.4 25 76 32.6 76 44.5C76 56.4 67.4 64 51 64H38" stroke="#171814" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M51 64L76 79" stroke="#FF5C35" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="24" cy="25" r="5" fill="#FF5C35"/>
+  <circle cx="76" cy="79" r="5" fill="#FF5C35"/>
+</svg>

@@ -20,12 +20,12 @@ export function EmptyState({
     <div
       className={`py-12 px-6 flex flex-col items-center justify-center text-center space-y-2.5 ${className}`}
     >
-      <div className="w-10 h-10 rounded-full bg-[#f4f4f5] border border-[#e4e4e7] flex items-center justify-center text-[#71717a]">
-        {icon || <CheckCircleIcon size={20} className="text-[#10b981]" />}
+      <div className="w-11 h-11 rounded-control bg-reloop-paper border border-reloop-line flex items-center justify-center text-reloop-muted shadow-subtle">
+        {icon || <CheckCircleIcon size={20} className="text-reloop-verified" />}
       </div>
       <div className="space-y-1 max-w-sm">
-        <h4 className="text-sm font-semibold text-[#18181b]">{title}</h4>
-        <p className="text-xs text-[#71717a] leading-relaxed">{description}</p>
+        <h4 className="text-sm font-semibold text-reloop-ink tracking-[-0.015em]">{title}</h4>
+        <p className="text-xs text-reloop-muted leading-relaxed">{description}</p>
       </div>
       {action && <div className="pt-2">{action}</div>}
     </div>

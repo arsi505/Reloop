@@ -1,4 +1,8 @@
 import type { Metadata } from 'next';
+import '@fontsource-variable/instrument-sans';
+import '@fontsource-variable/archivo';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/600.css';
 import './globals.css';
 import { Providers } from './providers';
 
@@ -14,7 +18,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-slate-900 text-slate-100 min-h-screen">
+      <body className="min-h-screen">
         <Providers>{children}</Providers>
       </body>
     </html>

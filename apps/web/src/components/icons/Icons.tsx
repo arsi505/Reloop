@@ -10,37 +10,31 @@ export function ReloopLogo({ size = 28, className = '' }: IconProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 32 32"
+      viewBox="0 0 64 64"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
+      aria-label="Reloop"
     >
-      <rect width="32" height="32" rx="8" fill="#F95721" />
       <path
-        d="M10 13C10 10.7909 11.7909 9 14 9H18C20.2091 9 22 10.7909 22 13V15C22 17.2091 20.2091 19 18 19H13"
-        stroke="white"
-        strokeWidth="2.2"
+        d="M10 18H21C29.5 18 29.5 32 38 32H54"
+        stroke="currentColor"
+        strokeWidth="8"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
       <path
-        d="M22 19C22 21.2091 20.2091 23 18 23H14C11.7909 23 10 21.2091 10 19V17C10 14.7909 11.7909 13 14 13H19"
-        stroke="white"
-        strokeWidth="2.2"
+        d="M10 46H21C29.5 46 29.5 32 38 32"
+        stroke="currentColor"
+        strokeWidth="8"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
+      <circle cx="10" cy="18" r="4" fill="#FF5C35" />
+      <circle cx="10" cy="46" r="4" fill="#FF5C35" />
+      <circle cx="54" cy="32" r="7" fill="#FF5C35" />
       <path
-        d="M11 10.5L9.5 9L11 7.5"
+        d="M50.8 32.1L53.1 34.3L57.2 29.5"
         stroke="white"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M21 21.5L22.5 23L21 24.5"
-        stroke="white"
-        strokeWidth="2"
+        strokeWidth="2.3"
         strokeLinecap="round"
         strokeLinejoin="round"
       />

@@ -1,0 +1,9 @@
+<svg width="192" height="46" viewBox="0 13 192 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Reloop Reliability Engine</title>
+  <path d="M9 21H18C25 21 25 34 32 34H46" stroke="#171814" stroke-width="7" stroke-linecap="round"/>
+  <path d="M9 47H18C25 47 25 34 32 34" stroke="#171814" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="9" cy="21" r="3.5" fill="#FF5C35"/><circle cx="9" cy="47" r="3.5" fill="#FF5C35"/><circle cx="46" cy="34" r="6" fill="#FF5C35"/>
+  <path d="M43.2 34L45.2 36L48.8 31.7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="66" y="37" fill="#171814" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="700" letter-spacing="-1.5">Reloop</text>
+  <text x="68" y="53" fill="#6B6D65" font-family="Arial, Helvetica, sans-serif" font-size="8" font-weight="700" letter-spacing="2.1">RELIABILITY ENGINE</text>
+</svg>

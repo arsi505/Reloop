@@ -1,0 +1,9 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Reloop</title>
+  <path d="M10 18H21C29.5 18 29.5 32 38 32H54" stroke="#F8F5ED" stroke-width="8" stroke-linecap="round"/>
+  <path d="M10 46H21C29.5 46 29.5 32 38 32" stroke="#F8F5ED" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="10" cy="18" r="4" fill="#FF5C35"/>
+  <circle cx="10" cy="46" r="4" fill="#FF5C35"/>
+  <circle cx="54" cy="32" r="7" fill="#FF5C35"/>
+  <path d="M50.8 32.1L53.1 34.3L57.2 29.5" stroke="white" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

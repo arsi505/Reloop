@@ -37,20 +37,20 @@ export function ErrorState({
 
   return (
     <div
-      className={`p-6 rounded-xl bg-white border border-[#fecaca] shadow-subtle text-left space-y-3 ${className}`}
+      className={`p-6 rounded-brand bg-reloop-surface border border-reloop-critical/25 shadow-card text-left space-y-3 ${className}`}
     >
-      <div className="flex items-center gap-2.5 text-[#b91c1c]">
-        <AlertCircleIcon size={18} className="shrink-0 text-[#ef4444]" />
-        <h3 className="font-semibold text-sm text-[#18181b]">{displayTitle}</h3>
+      <div className="flex items-center gap-2.5 text-reloop-critical">
+        <AlertCircleIcon size={18} className="shrink-0" />
+        <h3 className="font-semibold text-sm text-reloop-ink">{displayTitle}</h3>
       </div>
-      <p className="text-xs text-[#71717a] leading-relaxed">{displayMessage}</p>
+      <p className="text-xs text-reloop-muted leading-relaxed">{displayMessage}</p>
       {onRetry && (
         <div className="pt-2">
           <button
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#f4f4f5] hover:bg-white text-xs font-medium text-[#18181b] border border-[#ececeb] transition-colors shadow-subtle"
+            className="brand-button brand-button-secondary min-h-0 py-1.5 text-xs"
           >
-            <RefreshIcon size={12} className="text-[#71717a]" />
+            <RefreshIcon size={12} className="text-reloop-muted" />
             <span>Retry Operation</span>
           </button>
         </div>

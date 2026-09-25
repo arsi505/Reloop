@@ -8,9 +8,9 @@ import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
 import { MetricCardSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
+import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
 import {
   ProviderIcon,
-  RefreshIcon,
   ArrowRightIcon,
 } from '../icons/Icons';
 
@@ -53,27 +53,15 @@ export const HealthView: React.FC = () => {
   const degradedCount = integrations.filter((i) => i.health === 'DEGRADED').length;
 
   return (
-    <div className="space-y-6">
+    <div className="operations-view mx-auto max-w-[1440px] space-y-7">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#18181b]">
-            System Operational Health
-          </h1>
-          <p className="text-xs text-[#71717a] mt-0.5">
-            Factual adapter connectivity, synchronization recency, and safety barrier integrity.
-          </p>
-        </div>
-
-        <button
-          onClick={fetchHealthData}
-          disabled={isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#ececeb] text-xs font-medium text-[#18181b] hover:bg-[#fbfbfa] shadow-subtle transition-colors disabled:opacity-50"
-        >
-          <RefreshIcon size={12} className={isLoading ? 'animate-spin' : ''} />
-          <span>Refresh Status</span>
-        </button>
-      </div>
+      <OperationalPageHeader
+        index="06"
+        eyebrow="ADAPTER TELEMETRY / SAFETY STATE"
+        title="System health."
+        description="Factual connectivity, synchronization recency, and safety-barrier integrity across every provider adapter."
+        actions={<RefreshControl loading={isLoading} onClick={fetchHealthData}>Refresh status</RefreshControl>}
+      />
 
       {error ? (
         <ErrorState
@@ -84,7 +72,7 @@ export const HealthView: React.FC = () => {
       ) : (
         <>
           {/* Health Metrics Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="operations-metrics grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {isLoading ? (
               Array.from({ length: 4 }).map((_, idx) => (
                 <MetricCardSkeleton key={idx} />
@@ -139,7 +127,7 @@ export const HealthView: React.FC = () => {
           </div>
 
           {/* Provider Adapters Status Table */}
-          <div className="rounded-xl bg-white border border-[#ececeb] shadow-subtle p-5 space-y-4">
+          <div className="operations-table space-y-4 border border-reloop-line bg-reloop-surface p-5">
             <div className="flex items-center justify-between border-b border-[#f4f4f5] pb-3">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[#71717a]">
                 Provider Adapter Health & Rate State

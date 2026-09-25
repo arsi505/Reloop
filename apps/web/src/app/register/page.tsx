@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
 import { useAuth } from '../../context/auth-context';
+import { AuthShell } from '../../components/auth/AuthShell';
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -39,108 +39,87 @@ export default function RegisterPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-900 text-slate-100">
-      <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-xl p-8 shadow-xl">
-        <div className="flex items-center space-x-3 mb-6">
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
-            R
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Reloop</h1>
-            <p className="text-xs text-slate-400">Reliability & Recovery Platform</p>
-          </div>
-        </div>
-
-        <h2 className="text-lg font-semibold text-slate-100 mb-2">Create your organization</h2>
-        <p className="text-xs text-slate-400 mb-6">
-          Set up your team workspace and assign your initial OWNER credential.
-        </p>
-
+    <AuthShell
+      mode="register"
+      eyebrow="01 / WORKSPACE PROVISIONING"
+      title="Create your control plane."
+      description="Provision an isolated organization workspace and establish its first authorized owner."
+    >
         {error && (
-          <div className="mb-5 p-3 rounded-lg bg-rose-950/80 border border-rose-800/80 text-rose-200 text-xs leading-relaxed">
+          <div role="alert" className="mb-6 border border-reloop-critical/30 bg-reloop-critical-soft px-4 py-3 text-xs leading-5 text-reloop-critical">
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Full Name
-            </label>
+        <form onSubmit={handleSubmit} className="grid gap-5 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="name" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">FULL NAME</label>
             <input
+              id="name"
               type="text"
+              autoComplete="name"
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Alex Vance"
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+              className="w-full border border-reloop-line-strong bg-reloop-surface px-4 py-3.5 text-sm text-reloop-ink shadow-subtle outline-none transition focus:border-reloop-ink focus:shadow-[inset_3px_0_0_var(--color-signal)] placeholder:text-reloop-faint"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Work Email
-            </label>
+            <label htmlFor="email" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">WORK EMAIL</label>
             <input
+              id="email"
               type="email"
+              autoComplete="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="alex@acmecorp.com"
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+              className="w-full border border-reloop-line-strong bg-reloop-surface px-4 py-3.5 text-sm text-reloop-ink shadow-subtle outline-none transition focus:border-reloop-ink focus:shadow-[inset_3px_0_0_var(--color-signal)] placeholder:text-reloop-faint"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Organization Name
-            </label>
+            <label htmlFor="organizationName" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">ORGANIZATION</label>
             <input
+              id="organizationName"
               type="text"
+              autoComplete="organization"
               required
               value={organizationName}
               onChange={(e) => setOrganizationName(e.target.value)}
               placeholder="Acme Supply Co"
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+              className="w-full border border-reloop-line-strong bg-reloop-surface px-4 py-3.5 text-sm text-reloop-ink shadow-subtle outline-none transition focus:border-reloop-ink focus:shadow-[inset_3px_0_0_var(--color-signal)] placeholder:text-reloop-faint"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Password (minimum 8 characters)
-            </label>
+          <div className="sm:col-span-2">
+            <div className="mb-2 flex items-center justify-between">
+              <label htmlFor="password" className="brand-data text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">PASSWORD</label>
+              <span className="brand-data text-[8px] text-reloop-faint">MINIMUM 8 CHARACTERS</span>
+            </div>
             <input
+              id="password"
               type="password"
+              autoComplete="new-password"
               required
+              minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="********"
-              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+              placeholder="Create a secure password"
+              className="w-full border border-reloop-line-strong bg-reloop-surface px-4 py-3.5 text-sm text-reloop-ink shadow-subtle outline-none transition focus:border-reloop-ink focus:shadow-[inset_3px_0_0_var(--color-signal)] placeholder:text-reloop-faint"
             />
           </div>
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full mt-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-slate-400 text-white font-medium text-sm rounded-lg transition-colors shadow-sm flex items-center justify-center space-x-2"
+            className="brand-button brand-button-primary mt-1 min-h-[52px] w-full disabled:cursor-not-allowed disabled:opacity-55 sm:col-span-2"
           >
-            {isSubmitting ? (
-              <span>Creating Organization...</span>
-            ) : (
-              <span>Register & Launch</span>
-            )}
+            {isSubmitting ? 'Provisioning workspace…' : 'Create workspace ↗'}
           </button>
         </form>
-
-        <div className="mt-6 pt-5 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400">
-          <Link href="/login" className="hover:text-blue-400 transition-colors">
-            Already have an account? Sign in
-          </Link>
-          <Link href="/" className="hover:text-slate-300 transition-colors">
-            Overview
-          </Link>
-        </div>
-      </div>
-    </main>
+    </AuthShell>
   );
 }

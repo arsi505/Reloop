@@ -69,40 +69,40 @@ export function StatusBadge({
 
   const variantStyles: Record<BadgeVariant, { bg: string; text: string; border: string; dot: string }> = {
     success: {
-      bg: 'bg-[#ecfdf5]',
-      text: 'text-[#047857]',
-      border: 'border-[#a7f3d0]',
-      dot: 'bg-[#10b981]',
+      bg: 'bg-reloop-verified-soft',
+      text: 'text-reloop-verified',
+      border: 'border-reloop-verified/20',
+      dot: 'bg-reloop-verified',
     },
     warning: {
-      bg: 'bg-[#fffbeb]',
-      text: 'text-[#b45309]',
-      border: 'border-[#fde68a]',
-      dot: 'bg-[#f59e0b]',
+      bg: 'bg-reloop-warning-soft',
+      text: 'text-reloop-warning',
+      border: 'border-reloop-warning/20',
+      dot: 'bg-reloop-warning',
     },
     danger: {
-      bg: 'bg-[#fef2f2]',
-      text: 'text-[#b91c1c]',
-      border: 'border-[#fecaca]',
-      dot: 'bg-[#ef4444]',
+      bg: 'bg-reloop-critical-soft',
+      text: 'text-reloop-critical',
+      border: 'border-reloop-critical/20',
+      dot: 'bg-reloop-critical',
     },
     info: {
-      bg: 'bg-[#eff6ff]',
-      text: 'text-[#1d4ed8]',
-      border: 'border-[#bfdbfe]',
-      dot: 'bg-[#3b82f6]',
+      bg: 'bg-[#e7f1f5]',
+      text: 'text-[#315e73]',
+      border: 'border-[#315e73]/20',
+      dot: 'bg-[#315e73]',
     },
     neutral: {
-      bg: 'bg-[#f4f4f5]',
-      text: 'text-[#52525b]',
-      border: 'border-[#e4e4e7]',
-      dot: 'bg-[#71717a]',
+      bg: 'bg-reloop-paper',
+      text: 'text-reloop-muted',
+      border: 'border-reloop-line',
+      dot: 'bg-reloop-faint',
     },
     brand: {
-      bg: 'bg-[#fff5f1]',
-      text: 'text-[#f95721]',
-      border: 'border-[#ffdcd0]',
-      dot: 'bg-[#f95721]',
+      bg: 'bg-reloop-signal-soft',
+      text: 'text-reloop-signal-hover',
+      border: 'border-reloop-signal/25',
+      dot: 'bg-reloop-signal',
     },
   };
 
@@ -116,7 +116,7 @@ export function StatusBadge({
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border ${style.bg} ${style.text} ${style.border} ${sizeClasses} ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border font-mono tracking-[0.02em] ${style.bg} ${style.text} ${style.border} ${sizeClasses} ${className}`}
     >
       {showDot && (
         <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />

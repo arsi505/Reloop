@@ -1,0 +1,9 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Reloop Reconcile logo concept</title>
+  <path d="M17 27H31C43 27 43 48 55 48H79" stroke="#171814" stroke-width="10" stroke-linecap="round"/>
+  <path d="M17 69H31C43 69 43 48 55 48" stroke="#171814" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="17" cy="27" r="5" fill="#FF5C35"/>
+  <circle cx="17" cy="69" r="5" fill="#FF5C35"/>
+  <rect x="72" y="41" width="14" height="14" rx="7" fill="#FF5C35"/>
+  <path d="M76.2 48.2L78.4 50.3L82.2 45.8" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
