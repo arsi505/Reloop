@@ -11,19 +11,19 @@ const sizes = {
   compact: {
     symbol: 34,
     word: 'text-[22px]',
-    descriptor: 'text-[6px] tracking-[0.19em]',
+    descriptor: 'text-[9px] tracking-[0.11em]',
     gap: 'gap-2.5',
   },
   default: {
     symbol: 42,
     word: 'text-[28px]',
-    descriptor: 'text-[7px] tracking-[0.2em]',
+    descriptor: 'text-[9px] tracking-[0.12em]',
     gap: 'gap-3',
   },
   large: {
     symbol: 50,
     word: 'text-[33px]',
-    descriptor: 'text-[8px] tracking-[0.2em]',
+    descriptor: 'text-[10px] tracking-[0.12em]',
     gap: 'gap-3.5',
   },
 };

@@ -18,10 +18,10 @@ export function SectionIndex({ number, label, tone = 'dark', note }: SectionInde
         <rect x="1" y="16" width="4" height="4" fill="#FF5C35" />
         <rect x="35" y="8" width="7" height="7" fill="#FF5C35" />
       </svg>
-      <p className="brand-data text-[10px] font-semibold tracking-[0.16em] text-reloop-signal">{number} / {label}</p>
+      <p className="brand-data text-[11px] font-semibold tracking-[0.1em] text-reloop-signal sm:text-xs">{number} / {label}</p>
       <div className={`flex items-center justify-end gap-3 ${muted}`}>
         <span className={`hidden h-px flex-1 border-t ${rule} sm:block`} />
-        {note && <span className="hidden whitespace-nowrap brand-data text-[8px] tracking-[0.12em] lg:block">{note}</span>}
+        {note && <span className="hidden whitespace-nowrap brand-data text-[11px] tracking-[0.06em] lg:block">{note}</span>}
       </div>
     </div>
   );
@@ -29,7 +29,7 @@ export function SectionIndex({ number, label, tone = 'dark', note }: SectionInde
 
 export function EvidenceStamp() {
   return (
-    <div className="inline-grid grid-cols-[auto_1fr] border border-black/35 bg-black/[0.04] brand-data text-[8px] font-semibold tracking-[0.12em]">
+    <div className="inline-grid grid-cols-[auto_1fr] border border-black/35 bg-black/[0.04] brand-data text-[11px] font-semibold tracking-[0.06em]">
       <span className="border-r border-black/25 px-3 py-2">RL / 2048</span>
       <span className="px-3 py-2">VERIFIED · 10:44:35 UTC</span>
     </div>

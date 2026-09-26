@@ -1,84 +1,54 @@
 'use client';
 
 import Image from 'next/image';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const stages = [
   {
-    short: 'Signals',
-    eyebrow: 'SIGNALS NORMALIZED',
-    title: 'Two provider states received.',
-    pathLabel: 'Comparing states',
-    gateLabel: 'Policy pending',
-    footer: 'Signals ready for comparison',
+    name: 'Review',
+    status: 'Mismatch detected',
+    title: 'Provider states conflict',
+    description: 'Shopify, ShipStation, and warehouse status do not describe the same fulfillment outcome.',
+    action: 'Review evidence',
+    tone: 'signal',
   },
   {
-    short: 'Compare',
-    eyebrow: 'DISCREPANCY CONFIRMED',
-    title: 'One order. Two realities.',
-    pathLabel: 'Verify shipment',
-    gateLabel: 'Policy evaluating',
-    footer: 'Recovery path prepared',
+    name: 'Approval',
+    status: 'Approval required',
+    title: 'Recovery is ready',
+    description: 'The recommended update is scoped to this order and is waiting for an authorized operator.',
+    action: 'Approve recovery',
+    tone: 'signal',
   },
   {
-    short: 'Guard',
-    eyebrow: 'HUMAN GATE ACTIVE',
-    title: 'Judgment before action.',
-    pathLabel: 'Reconcile fulfillment',
-    gateLabel: 'Approval required',
-    footer: 'Waiting for authorized operator',
+    name: 'Recovery',
+    status: 'Recovery coordinated',
+    title: 'The approved next step is tracked',
+    description: 'Reloop keeps the authorized action and resulting provider details attached to the case.',
+    action: 'Track recovery',
+    tone: 'dark',
   },
   {
-    short: 'Verify',
-    eyebrow: 'STATE VERIFIED',
-    title: 'The loop is closed.',
-    pathLabel: 'Provider state aligned',
-    gateLabel: 'Evidence recorded',
-    footer: 'Recovery verified safely',
+    name: 'Verification',
+    status: 'Verified',
+    title: 'Provider states are aligned',
+    description: 'The connected systems were checked again before the case was marked resolved.',
+    action: 'View outcome',
+    tone: 'verified',
   },
-];
+] as const;
 
-function CheckMark() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-      <path d="M2.5 6.8L5.2 9.3L10.6 3.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PauseIcon({ playing }: { playing: boolean }) {
-  return playing ? (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3.5 2.5V9.5M8.5 2.5V9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-  ) : (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3.5 2.3L9.2 6L3.5 9.7V2.3Z" fill="currentColor" /></svg>
-  );
-}
-
-function ProviderNode({
-  provider,
-  label,
-  value,
-  tone,
-  active,
-}: {
-  provider: string;
-  label: string;
-  value: string;
-  tone: 'shopify' | 'shipstation';
-  active: boolean;
-}) {
-  const colors = tone === 'shopify'
-    ? 'bg-[#eef5df] text-[#527320] border-[#cdddb1]'
-    : 'bg-[#e8f2f8] text-[#245f80] border-[#bfd5e1]';
+function ProviderState({ provider, label, value }: { provider: 'Shopify' | 'ShipStation'; label: string; value: string }) {
+  const logo = provider === 'Shopify' ? '/integrations/shopify-logo.svg' : '/integrations/shipstation-logo.svg';
+  const dimensions = provider === 'Shopify' ? { width: 82, height: 24 } : { width: 108, height: 17 };
 
   return (
-    <div className={`circuit-provider relative z-10 w-full rounded-[3px] border bg-reloop-surface p-4 sm:p-5 ${active ? 'is-active border-reloop-signal/50' : 'border-reloop-line'}`}>
-      <div className="flex items-center justify-between gap-3">
-        <span className={`rounded-full border px-2.5 py-1 brand-data text-[8px] font-semibold tracking-[0.1em] ${colors}`}>{provider}</span>
-        <span className={`h-1.5 w-1.5 rounded-full ${active ? 'animate-signal-pulse bg-reloop-signal' : 'bg-reloop-line-strong'}`} />
+    <div className="rounded-lg border border-[#e8e5dd] bg-white p-3.5 shadow-[0_1px_2px_rgba(23,24,20,0.03)] sm:p-4">
+      <div className="flex min-h-6 items-center">
+        <Image src={logo} alt={provider} width={dimensions.width} height={dimensions.height} style={{ width: `${dimensions.width}px`, height: 'auto' }} />
       </div>
-      <p className="mt-5 brand-data text-[8px] tracking-[0.15em] text-reloop-faint">{label}</p>
-      <p className="mt-2 text-sm font-semibold tracking-[-0.02em] text-reloop-ink">{value}</p>
+      <p className="mt-3 text-xs text-[#787970]">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-[#181914]">{value}</p>
     </div>
   );
 }
@@ -86,90 +56,83 @@ function ProviderNode({
 export function RecoveryCircuit() {
   const [stage, setStage] = useState(0);
   const [playing, setPlaying] = useState(true);
+  const frameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reducedMotion) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setPlaying(false);
-      setStage(3);
+      return;
     }
-  }, []);
 
-  useEffect(() => {
     if (!playing) return;
-    const timer = window.setInterval(() => setStage((current) => (current + 1) % stages.length), 2400);
-    return () => window.clearInterval(timer);
-  }, [playing]);
+    const timer = window.setTimeout(() => setStage((current) => (current + 1) % stages.length), 3600);
+    return () => window.clearTimeout(timer);
+  }, [playing, stage]);
 
   const current = stages[stage];
-  const pathActive = stage >= 1;
-  const gateActive = stage >= 2;
-  const verified = stage === 3;
 
   return (
-    <div className="relative mx-auto flex h-full w-full max-w-[680px] flex-col justify-center pt-10">
-      <div className="absolute right-0 top-0 flex items-center gap-2 brand-data text-[8px] font-semibold tracking-[0.15em] text-reloop-faint">
-        <span className={`h-2 w-2 rounded-full ${playing ? 'animate-signal-pulse bg-reloop-verified' : 'bg-reloop-faint'}`} />
-        {playing ? 'LIVE RECONCILIATION' : 'SEQUENCE PAUSED'}
+    <div ref={frameRef} className="overflow-hidden rounded-xl border border-[#ddd9cf] bg-[#fbfaf7] shadow-[0_30px_80px_rgba(36,31,24,0.12),0_2px_5px_rgba(36,31,24,0.05)]">
+      <div className="flex h-12 items-center justify-between border-b border-[#e4e0d7] bg-white/90 px-4 sm:px-5">
+        <div className="flex items-center gap-3">
+          <Image src="/brand/reloop-symbol.svg" alt="" width={25} height={25} />
+          <span className="text-xs font-semibold text-[#35362f]">Exception RL-2048</span>
+        </div>
+        <span className="flex items-center gap-2 text-xs font-medium text-[#6d6f66]"><span className="h-2 w-2 rounded-full bg-reloop-signal" /> Needs review</span>
       </div>
 
-      <div className="relative grid gap-5 sm:grid-cols-[minmax(180px,1fr)_100px_minmax(190px,1fr)] sm:items-center sm:gap-3">
-        <div className="flex flex-col gap-4 sm:gap-28">
-          <ProviderNode provider="SHOPIFY" label="FULFILLMENT STATE" value="Unfulfilled" tone="shopify" active={stage === 0} />
-          <ProviderNode provider="SHIPSTATION" label="SHIPMENT STATE" value="In transit" tone="shipstation" active={stage === 0} />
-        </div>
-
-        <div className="relative hidden h-[330px] sm:block">
-          <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 330" fill="none" aria-hidden="true">
-            <path d="M0 78H18C45 78 41 165 69 165H100" stroke="#C2BDB3" strokeWidth="1.5" />
-            <path d="M0 252H18C45 252 41 165 69 165" stroke="#C2BDB3" strokeWidth="1.5" />
-            <path pathLength="1" className={`circuit-route ${pathActive ? 'is-active' : ''}`} d="M0 78H18C45 78 41 165 69 165H100" stroke="#FF5C35" strokeWidth="2" />
-            <path pathLength="1" className={`circuit-route circuit-route-delay ${pathActive ? 'is-active' : ''}`} d="M0 252H18C45 252 41 165 69 165" stroke="#FF5C35" strokeWidth="2" />
-            {pathActive && <path pathLength="1" className="circuit-packet" d="M0 78H18C45 78 41 165 69 165H100" stroke="#FF5C35" strokeWidth="5" />}
-            <circle className={`circuit-junction ${gateActive ? 'is-active' : ''}`} cx="69" cy="165" r="5" fill="#FF5C35" />
-          </svg>
-          <span className={`absolute left-[43px] top-1/2 -translate-y-1/2 rounded-full border bg-reloop-paper px-2 py-1 brand-data text-[7px] tracking-[0.12em] transition-colors duration-500 ${pathActive ? 'border-reloop-signal text-reloop-signal-hover' : 'border-reloop-line text-reloop-faint'}`}>{gateActive ? 'GUARD' : 'COMPARE'}</span>
-        </div>
-
-        <div className="relative z-10">
-          <div className="mx-auto flex h-12 w-px flex-col justify-end bg-reloop-line sm:hidden"><span className={`block w-px bg-reloop-signal transition-[height] duration-700 ${pathActive ? 'h-full' : 'h-0'}`} /></div>
-          <div className={`circuit-result overflow-hidden rounded-[3px] border bg-reloop-ink text-reloop-paper ${verified ? 'is-verified border-reloop-verified' : 'border-reloop-ink'}`}>
-            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-              <Image src="/brand/reloop-symbol-light.svg" alt="" width={42} height={42} />
-              <span className="brand-data text-[8px] tracking-[0.14em] text-[#92948d]">CASE RL-2048</span>
-            </div>
-            <div key={stage} className="animate-brand-reveal p-5 sm:p-6">
-              <p className={`brand-data text-[8px] font-semibold tracking-[0.16em] ${verified ? 'text-[#6ed6b4]' : 'text-[#ff7a58]'}`}>{current.eyebrow}</p>
-              <h2 className="mt-4 text-2xl font-semibold leading-tight tracking-[-0.04em]">{current.title}</h2>
-              <div className="mt-7 space-y-3 border-t border-white/10 pt-5">
-                <div className="flex items-center justify-between gap-4 text-xs"><span className="text-[#aeb0a8]">Recommended path</span><span className="text-right font-semibold">{current.pathLabel}</span></div>
-                <div className="flex items-center justify-between gap-4 text-xs"><span className="text-[#aeb0a8]">Policy gate</span><span className={`text-right ${gateActive && !verified ? 'text-[#ffd0c3]' : verified ? 'text-[#8ce1c5]' : 'text-[#d0d1cb]'}`}>{current.gateLabel}</span></div>
-              </div>
-            </div>
-            <div className={`flex min-h-[48px] items-center gap-2 px-5 py-4 text-xs font-semibold text-white transition-colors duration-500 ${verified ? 'bg-reloop-verified' : 'bg-reloop-signal'}`}><CheckMark /> {current.footer}</div>
+      <div className="grid min-h-[440px] md:grid-cols-[136px_minmax(0,1fr)]">
+        <aside className="hidden border-r border-white/10 bg-reloop-ink px-3 py-5 text-reloop-paper md:block" aria-label="Product preview navigation">
+          <p className="px-3 text-[11px] font-medium text-[#8f9189]">Operations</p>
+          <div className="mt-4 space-y-1 text-xs">
+            <div className="px-3 py-2.5 text-[#9ea098]">Overview</div>
+            <div className="border-l-2 border-reloop-signal bg-white/[0.07] px-3 py-2.5 font-semibold text-white">Exceptions</div>
+            <div className="px-3 py-2.5 text-[#9ea098]">Orders</div>
+            <div className="px-3 py-2.5 text-[#9ea098]">Recoveries</div>
           </div>
-        </div>
-      </div>
+        </aside>
 
-      <div className="mt-8 border-t border-reloop-line pt-5 sm:mt-11">
-        <div className="flex items-center justify-between gap-4">
-          <div className="grid flex-1 grid-cols-4 gap-1" role="group" aria-label="Recovery sequence stages">
+        <div className="min-w-0 p-4 sm:p-5">
+          <div className="flex flex-col gap-3 border-b border-[#e7e3da] pb-5 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-medium text-[#7a7b73]">Order #10482</p>
+              <h2 className="mt-2 text-xl font-semibold tracking-[-0.035em] text-[#181914]">Shipment state mismatch</h2>
+              <p className="mt-2 max-w-md text-sm leading-6 text-[#6d6f66]">The order, shipment, and warehouse status do not agree.</p>
+            </div>
+            <span className="w-fit rounded-full border border-[#ffc6b7] bg-[#fff2ee] px-3 py-1.5 text-xs font-semibold text-[#b93b1f]">Open exception</span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <ProviderState provider="Shopify" label="Order status" value="Unfulfilled" />
+            <ProviderState provider="ShipStation" label="Shipment status" value="In transit" />
+          </div>
+
+          <div key={stage} className={`mt-4 rounded-lg border p-4 sm:p-5 ${current.tone === 'verified' ? 'border-[#a9ddca] bg-[#effaf5]' : current.tone === 'dark' ? 'border-reloop-ink bg-reloop-ink text-reloop-paper' : 'border-[#f0c2b7] bg-[#fff7f4]'}`}>
+            <div className="flex items-center justify-between gap-4">
+              <span className={`text-xs font-semibold ${current.tone === 'verified' ? 'text-reloop-verified' : current.tone === 'dark' ? 'text-[#b9bbb3]' : 'text-reloop-signal-hover'}`}>{current.status}</span>
+              <span className={`text-xs ${current.tone === 'dark' ? 'text-[#8f9189]' : 'text-[#777970]'}`}>Case activity</span>
+            </div>
+            <h3 className="mt-3 text-lg font-semibold tracking-[-0.025em]">{current.title}</h3>
+            <p className={`mt-2 text-sm leading-6 ${current.tone === 'dark' ? 'text-[#b9bbb3]' : 'text-[#64665e]'}`}>{current.description}</p>
+            <div className={`mt-4 flex items-center justify-between border-t pt-3 ${current.tone === 'dark' ? 'border-white/10' : 'border-black/10'}`}>
+              <span className={`text-xs ${current.tone === 'dark' ? 'text-[#8f9189]' : 'text-[#777970]'}`}>Recommended action</span>
+              <span className="text-xs font-semibold">{current.action}</span>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-4 gap-1" role="group" aria-label="Recovery preview states">
             {stages.map((item, index) => (
               <button
-                key={item.short}
+                key={item.name}
                 type="button"
+                aria-pressed={stage === index}
                 onClick={() => { setStage(index); setPlaying(false); }}
-                className={`relative pb-3 text-left brand-data text-[8px] font-semibold tracking-[0.08em] transition-colors ${index === stage ? 'text-reloop-ink' : 'text-reloop-faint hover:text-reloop-muted'}`}
-                aria-pressed={index === stage}
+                className={`min-h-11 border-t-2 px-1 pt-2 text-left text-[11px] font-semibold transition-colors sm:text-xs ${stage === index ? 'border-reloop-signal text-reloop-ink' : 'border-[#ddd9cf] text-[#8a8c84] hover:border-[#aaa69d] hover:text-reloop-ink'}`}
               >
-                <span className={`absolute inset-x-0 bottom-0 h-px ${index <= stage ? 'bg-reloop-signal' : 'bg-reloop-line'}`} />
-                <span className="hidden sm:inline">0{index + 1} / </span>{item.short.toUpperCase()}
+                {item.name}
               </button>
             ))}
           </div>
-          <button type="button" onClick={() => setPlaying((value) => !value)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-reloop-line bg-reloop-surface text-reloop-muted transition-colors hover:border-reloop-ink hover:text-reloop-ink" aria-label={playing ? 'Pause recovery sequence' : 'Play recovery sequence'}>
-            <PauseIcon playing={playing} />
-          </button>
         </div>
       </div>
     </div>

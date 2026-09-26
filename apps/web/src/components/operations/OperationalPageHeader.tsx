@@ -12,9 +12,9 @@ export function OperationalPageHeader({ index, eyebrow, title, description, acti
   return (
     <header className="flex flex-col gap-6 border-b border-reloop-line pb-7 sm:flex-row sm:items-end sm:justify-between">
       <div className="flex max-w-3xl gap-4 sm:gap-6">
-        <span className="brand-data pt-1 text-[10px] font-semibold tracking-[0.12em] text-reloop-signal-hover">{index}</span>
+        <span className="brand-data pt-1 text-[11px] font-semibold tracking-[0.08em] text-reloop-signal-hover">{index}</span>
         <div>
-          <p className="brand-data text-[9px] font-semibold tracking-[0.17em] text-reloop-faint">{eyebrow}</p>
+          <p className="brand-data text-[11px] font-semibold tracking-[0.09em] text-reloop-faint sm:text-xs">{eyebrow}</p>
           <h1 className="mt-3 font-display text-[clamp(2.25rem,3.6vw,3.85rem)] font-[620] leading-[0.96] tracking-[-0.05em] text-reloop-ink">{title}</h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-reloop-muted">{description}</p>
         </div>

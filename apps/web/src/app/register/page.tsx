@@ -41,9 +41,9 @@ export default function RegisterPage() {
   return (
     <AuthShell
       mode="register"
-      eyebrow="01 / WORKSPACE PROVISIONING"
-      title="Create your control plane."
-      description="Provision an isolated organization workspace and establish its first authorized owner."
+      eyebrow="01 / WORKSPACE SETUP"
+      title="Create your workspace."
+      description="Set up your organization workspace and establish its first authorized owner."
     >
         {error && (
           <div role="alert" className="mb-6 border border-reloop-critical/30 bg-reloop-critical-soft px-4 py-3 text-xs leading-5 text-reloop-critical">
@@ -53,7 +53,7 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit} className="grid gap-5 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            <label htmlFor="name" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">FULL NAME</label>
+            <label htmlFor="name" className="brand-data mb-2 block text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">FULL NAME</label>
             <input
               id="name"
               type="text"
@@ -67,7 +67,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label htmlFor="email" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">WORK EMAIL</label>
+            <label htmlFor="email" className="brand-data mb-2 block text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">WORK EMAIL</label>
             <input
               id="email"
               type="email"
@@ -81,7 +81,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label htmlFor="organizationName" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">ORGANIZATION</label>
+            <label htmlFor="organizationName" className="brand-data mb-2 block text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">ORGANIZATION</label>
             <input
               id="organizationName"
               type="text"
@@ -96,8 +96,8 @@ export default function RegisterPage() {
 
           <div className="sm:col-span-2">
             <div className="mb-2 flex items-center justify-between">
-              <label htmlFor="password" className="brand-data text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">PASSWORD</label>
-              <span className="brand-data text-[8px] text-reloop-faint">MINIMUM 8 CHARACTERS</span>
+              <label htmlFor="password" className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">PASSWORD</label>
+              <span className="brand-data text-[10px] text-reloop-faint sm:text-[11px]">MINIMUM 8 CHARACTERS</span>
             </div>
             <input
               id="password"

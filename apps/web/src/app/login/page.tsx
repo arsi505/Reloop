@@ -40,7 +40,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="email" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">
+            <label htmlFor="email" className="brand-data mb-2 block text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">
               WORK EMAIL
             </label>
             <input
@@ -56,7 +56,7 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="brand-data mb-2 block text-[9px] font-semibold tracking-[0.12em] text-reloop-muted">PASSWORD</label>
+            <label htmlFor="password" className="brand-data mb-2 block text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">PASSWORD</label>
             <input
               id="password"
               type="password"

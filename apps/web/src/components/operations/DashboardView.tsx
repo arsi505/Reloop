@@ -139,7 +139,7 @@ export function DashboardView({
       {/* Header Row */}
       <div className="flex flex-col gap-6 border-b border-reloop-line pb-7 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
-          <p className="brand-data text-[9px] font-semibold tracking-[0.18em] text-reloop-signal-hover">LIVE OPERATING PICTURE / {firstName.toUpperCase()}</p>
+          <p className="brand-data text-[11px] font-semibold tracking-[0.09em] text-reloop-signal-hover sm:text-xs">LIVE OPERATING PICTURE / {firstName.toUpperCase()}</p>
           <h2 className="mt-3 font-display text-[clamp(2.3rem,4vw,4.15rem)] font-[620] leading-[0.95] tracking-[-0.05em] text-reloop-ink">
             Keep every order<br className="hidden sm:block" /> in a trusted state.
           </h2>
@@ -149,7 +149,7 @@ export function DashboardView({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex min-h-10 items-center gap-2 border border-reloop-line bg-reloop-surface px-3 brand-data text-[8px] font-semibold tracking-[0.11em] text-reloop-muted">
+          <div className="flex min-h-10 items-center gap-2 border border-reloop-line bg-reloop-surface px-3 brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">
             <ClockIcon size={13} className="text-reloop-verified" />
             <span>LIVE FEED</span>
           </div>
@@ -184,7 +184,7 @@ export function DashboardView({
             {/* Card 1: Open Exceptions */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">01 / OPEN EXCEPTIONS</span>
+                <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">01 / OPEN EXCEPTIONS</span>
                 <span className="w-2 h-2 rounded-full bg-[#f95721]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -204,7 +204,7 @@ export function DashboardView({
             {/* Card 2: Needs Approval */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">02 / NEEDS APPROVAL</span>
+                <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">02 / NEEDS APPROVAL</span>
                 <span className="w-2 h-2 rounded-full bg-[#f59e0b]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -222,7 +222,7 @@ export function DashboardView({
             {/* Card 3: Blocked Cases */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">03 / BLOCKED CASES</span>
+                <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">03 / BLOCKED CASES</span>
                 <span className="w-2 h-2 rounded-full bg-[#ef4444]" />
               </div>
               <div className="flex items-baseline gap-2">
@@ -240,7 +240,7 @@ export function DashboardView({
             {/* Card 4: Resolved Cases */}
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
-                <span className="brand-data text-[9px] font-semibold tracking-[0.1em] text-reloop-muted">04 / RESOLVED CASES</span>
+                <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">04 / RESOLVED CASES</span>
                 <span className="w-2 h-2 rounded-full bg-[#10b981]" />
               </div>
               <div className="flex items-baseline gap-2">
