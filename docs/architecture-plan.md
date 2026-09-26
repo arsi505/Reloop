@@ -78,7 +78,7 @@ Reloop/
 ## 4. Execution & Data Flow Architecture
 
 ### Ingestion Flow
-1. **Webhooks**: Shopify, ShipStation, or 3PL warehouse fires order/shipment webhooks to `apps/api`.
+1. **Webhooks**: Shopify and supported generic 3PL/simulator sources send order or shipment events to `apps/api`; ShipStation V1 uses triggered read-only API sync rather than native webhook ingestion.
 2. **Scheduled Polling**: `apps/scheduler` triggers periodic reconciliation scans via `packages/integration-sdk` to detect silent drops and stuck states.
 3. **State Evaluation**: Incoming state is compared against the database. If a discrepancy matches one of the 8 canonical failure cases, an Exception record is created in PostgreSQL with status `OPEN` and assigned a Recovery Level (`AUTO_RECOVER`, `AUTO_INVESTIGATE`, `REQUIRE_APPROVAL`, `BLOCK`).
 
@@ -233,4 +233,3 @@ Queued to Redis Stream worker                 UI shows Recovery Preview
 - **Zero Duplicate Side-Effects Under Crash Failure**: Worker crashes during `RUNNING` status are classified as ambiguous crashes and placed into `BLOCKED` status (`AMBIGUOUS_WORKER_CRASH`) with zero blind re-executions, preventing duplicate external mutations. Expired leases in `CLAIMED` status cleanly transition the abandoned attempt to `ABANDONED` and resume execution on a replacement worker.
 - **Race-Safe Concurrency & Routing Invariants**: Simultaneous approvals on the same step enforce atomic CAS semantics, guaranteeing exactly 1 winner and 1 conflict rejection. Case routing and detection enforce strict transactional advisory locking and deduplication, ensuring zero duplicate active workflows or cases.
 - **Post-Load Database Invariant Verification**: Exhaustive SQL diagnostic audit verified 0 orphaned JobAttempts, 0 duplicate active workflows per case, 0 duplicate active cases per dedupeKey, 0 duplicate idempotency keys, and 0 resolved cases lacking verified resolution timestamps. See [reliability-benchmark.md](./reliability-benchmark.md).
-

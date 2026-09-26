@@ -70,7 +70,7 @@ During peak evening order hours, the 3PL’s webhook or API experiences a brief 
 ### Context
 A Shopify order was placed 6 hours ago, marked paid in Shopify, but is completely missing in the warehouse 3PL management system.
 
-* **Trigger**: Periodic sync detects Shopify Order `#10521` (Paid, Unfulfilled) has no matching order number, reference number, or customer email in the 3PL queue.
+* **Trigger**: A triggered provider sync followed by reconciliation detects Shopify Order `#10521` (Paid, Unfulfilled) has no matching order number, reference number, or customer email in the 3PL queue.
 * **What Reloop Detects**:
   - Reloop identifies failure: **Shopify order missing at 3PL**.
   - Because re-submitting an order to a warehouse carries the financial risk of duplicate picking if the order was under a different reference, Reloop assigns recovery level `REQUIRE_APPROVAL`.

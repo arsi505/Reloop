@@ -77,7 +77,7 @@ reloop/
 ├── apps/
 │   ├── api/                    # NestJS Core API Gateway (Port 3101)
 │   ├── web/                    # Next.js 15.5 App Router Dashboard (Port 3100)
-│   ├── worker/                 # Distributed BullMQ / Stream Worker Daemon
+│   ├── worker/                 # Distributed Redis Streams Worker Daemon
 │   └── scheduler/              # Cron Poller & Durable Job Sweeper
 ├── packages/
 │   ├── contracts/              # Shared DTOs, Enums, Interfaces, API Contracts

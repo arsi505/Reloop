@@ -24,7 +24,7 @@ At integration boundaries, failure is inevitable:
 - **Cascading Retries & Double Actions**: Naive retries during intermittent API timeouts generate duplicate shipments, double-refunds, or trigger upstream rate limits.
 - **Silent Desynchronization**: A customer service agent cancels an order in Shopify while a 3PL worker is packing it on the warehouse floor; the parcel ships anyway.
 
-**Reloop provides a dedicated reliability and recovery layer for multi-channel commerce.** It continuously ingests asynchronous events, reconciles cross-system entities against a single operational truth, isolates discrepancies into explicit **Recovery Cases**, orchestrates multi-step **DAG Workflows**, halts hazardous actions behind **Human Operator Approval Gates**, and durably records every state transition in an append-only **Flight Recorder**.
+**Reloop provides a dedicated reliability and recovery layer for multi-channel commerce.** It ingests authenticated provider events and triggered sync results, reconciles cross-system entities against a single operational truth, isolates discrepancies into explicit **Recovery Cases**, orchestrates multi-step **DAG Workflows**, halts hazardous actions behind **Human Operator Approval Gates**, and durably records every state transition in an append-only **Flight Recorder**.
 
 ---
 
@@ -60,7 +60,7 @@ Reloop enforces a clean separation of concerns between durable storage, distribu
 - **PostgreSQL = Durable Source of Truth**: All tenant models, external orders, integration events, recovery cases, workflows, approval gates, and flight recorder audit logs are stored durably with relational integrity.
 - **Redis = Dispatch, Coordination & Realtime Infrastructure**: Provides Redis Streams for work distribution, distributed Redlock leases for mutual exclusion, and Pub/Sub for lightweight invalidation signals. Redis is **not** treated as durable state of record.
 - **Scheduler = Durable Job Rediscovery**: Periodically sweeps PostgreSQL to discover eligible execution candidates, detect expired worker leases, and dispatch work into Redis Streams.
-- **Worker = Claim, Lease, Execute, Verify**: Atomically claims jobs from Redis Streams, holds a renewal lease, executes DAG steps idempotently, and independently verifies post-mutation consistency against external APIs before writing final state to PostgreSQL.
+- **Worker = Claim, Lease, Execute, Verify**: Atomically claims jobs from Redis Streams, holds a renewal lease, executes DAG steps idempotently, and independently verifies post-action consistency through authoritative adapter reads before writing final state to PostgreSQL. V1 recovery writes remain simulator-only.
 - **Realtime Notifications = Invalidation Signals**: WebSockets (via Socket.IO) transmit lightweight cache invalidation signals; the browser refetches authoritative state from REST endpoints backed by PostgreSQL.
 
 ```mermaid
@@ -170,8 +170,8 @@ flowchart TD
     EvaluatePolicy -->|Low Risk / Safe Mode| ExecStep
 
     ExecStep --> AcquireLock["Acquire Distributed Redlock (Entity Key)"]
-    AcquireLock --> UpstreamMutation["Execute Safe Mutation (e.g. Create Fulfillment)"]
-    UpstreamMutation --> StepVerify["Step 3: VERIFY_STATE<br/>Case Status: VERIFYING"]
+    AcquireLock --> SimulatorAction["Execute Simulator-Backed Recovery Action<br/>(Real Providers Remain Read-Only)"]
+    SimulatorAction --> StepVerify["Step 3: VERIFY_STATE<br/>Case Status: VERIFYING"]
     StepVerify --> CrossQuery["Query Upstream Provider API"]
     CrossQuery --> ValidateCheck{"State Synchronized?"}
 
@@ -371,9 +371,9 @@ Reloop is designed under a zero-trust multi-tenant model:
 ### Known Limitations
 - **Local Benchmark Evidence**: Throughput and stress measurements were conducted on local developer hardware; performance under distributed multi-region cloud topologies will depend on network latency and provisioned IOPS.
 - **Single-Region Architecture**: The V1 architecture is designed for single-region deployments; active-active multi-region database replication is not implemented.
-- **Real Provider Credentials**: Live end-to-end smoke testing against real Shopify storefronts and ShipStation accounts requires valid developer credentials and merchant account permissions.
+- **Real Provider Credentials**: Live read-only integration smoke testing against real Shopify storefronts and ShipStation accounts requires valid developer credentials and merchant account permissions.
 - **Remaining Development Dependencies**: While runtime critical vulnerabilities are at 0, transitive dev-only dependencies report low/moderate advisories.
-- **V1 Recovery Scope**: Automated recovery actions in V1 focus specifically on order discrepancies, fulfillment synchronization, and tracking updates.
+- **V1 Recovery Scope**: Automated recovery actions in V1 are simulator-backed demonstrations of order-discrepancy, fulfillment-synchronization, and tracking-update workflows; real Shopify and ShipStation integrations remain read-only.
 
 ### V1 Non-Goals (Explicitly Out of Scope)
 The following capabilities are deliberately outside the scope of Reloop V1:
@@ -398,7 +398,7 @@ The following capabilities are deliberately outside the scope of Reloop V1:
 - **Backend Framework**: NestJS, Express, Socket.IO
 - **Frontend Framework**: Next.js 15.5 (App Router), React 18, Tailwind CSS, Lucide Icons
 - **Database & Modeling**: PostgreSQL 16, Prisma ORM
-- **Queue & Coordination**: Redis 7, BullMQ, IORedis, Redlock
+- **Queue & Coordination**: Redis 7 Streams, IORedis, Redlock
 - **Language & Runtime**: TypeScript 5.7, Node.js 20+
 - **Security & Cryptography**: Argon2, Node Crypto (AES-256-GCM, HMAC-SHA256)
 - **Containerization**: Docker, Docker Compose

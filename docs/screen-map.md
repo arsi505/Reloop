@@ -126,7 +126,7 @@ Reloop utilizes a focused, calm B2B layout:
 * **Main Information**:
   - Integration Cards:
     - **Shopify**: Store domain, webhook status, API quota usage, sync latency.
-    - **ShipStation**: Account identifier, webhook health, polling interval.
+    - **ShipStation**: Account identifier, connection status, and last triggered sync.
     - **Warehouse / 3PL**: API endpoint, connection protocol, recent heartbeat response time.
   - Health status tag: `HEALTHY` (green), `DEGRADED` (amber), `DISCONNECTED / ERROR` (red).
   - Last sync timestamp and error rate over last 24h.

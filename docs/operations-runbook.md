@@ -40,10 +40,10 @@ Reloop is a distributed reverse-logistics reconciliation and recovery platform c
 
 ### Components Summary
 1. **Core API (`apps/api`)**: NestJS HTTP & WebSocket server. Handles authentication, RBAC, tenant operations, approval decisions, webhook ingestion, and realtime socket events.
-2. **Distributed Worker (`apps/worker`)**: Distributed BullMQ and database job execution engine. Processes asynchronous reconciliation workflows, external carrier queries, and notification dispatches.
+2. **Distributed Worker (`apps/worker`)**: Distributed Redis Streams and database job execution engine. Processes asynchronous reconciliation workflows, external carrier queries, and notification dispatches.
 3. **Scheduler Daemon (`apps/scheduler`)**: Periodic task coordinator. Schedules interval reconciliations, monitors worker heartbeats, and recovers orphaned jobs.
 4. **PostgreSQL 16**: Durable primary datastore. Implements ACID transactions, foreign-key multi-tenancy, and row-level locking (`FOR UPDATE SKIP LOCKED`).
-5. **Redis 7**: High-throughput broker for BullMQ task queues, rate-limiting caches, and Socket.io pub/sub adapter.
+5. **Redis 7**: High-throughput broker for Redis Streams dispatch, rate-limiting caches, and Socket.io pub/sub adapter.
 6. **Web Client (`apps/web`)**: Next.js single-page application and operator dashboard.
 
 ---
@@ -204,7 +204,7 @@ Redis is treated as a high-performance message broker and ephemeral cache. Postg
 ### Runbook 2: Redis Outage / Queue Stall
 **Symptoms**:
 - Realtime WebSocket updates cease.
-- New jobs fail to dispatch to BullMQ.
+- New jobs fail to dispatch to Redis Streams.
 
 **Action Steps**:
 1. Check Redis connectivity:
@@ -282,7 +282,7 @@ All Reloop services trap `SIGTERM` and `SIGINT` signals:
   - No multi-region active-active database replication or distributed Paxos/Raft consensus beyond PostgreSQL ACID transactions is claimed.
 - **Vertical & Horizontal Scaling**:
   - API instances can be horizontally scaled behind a round-robin or least-connections HTTP load balancer with sticky sessions or shared Redis adapter for WebSockets.
-  - Worker instances scale horizontally by increasing container replicas; concurrency is regulated by PostgreSQL `FOR UPDATE SKIP LOCKED` and Redis BullMQ workers.
+  - Worker instances scale horizontally by increasing container replicas; concurrency is regulated by PostgreSQL `FOR UPDATE SKIP LOCKED` and Redis Streams consumer groups.
 
 ---
 
