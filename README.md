@@ -1,13 +1,12 @@
 # Reloop: E-Commerce Reliability & Recovery Engine
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.5-black.svg)](https://nextjs.org/)
 [![NestJS](https://img.shields.io/badge/NestJS-10.4-red.svg)](https://nestjs.com/)
-[![Prisma](https://img.shields.io/badge/Prisma-5.22-teal.svg)](https://www.prisma.io/)
+[![Prisma](https://img.shields.io/badge/Prisma-6.19-teal.svg)](https://www.prisma.io/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7-red.svg)](https://redis.io/)
-[![Security Audit](https://img.shields.io/badge/Vulnerabilities-0%20Critical-brightgreen.svg)]()
-[![Release](https://img.shields.io/badge/Release%20Candidate-v0.1.0--rc1-orange.svg)]()
+[![Release](https://img.shields.io/badge/Release-v1.0.0-brightgreen.svg)](https://github.com/arsi505/Reloop/tree/v1.0.0)
 
 > **Core Operating Invariant:**
 > `CHECK -> GATE / APPROVAL -> EXECUTE -> VERIFY -> RESOLVED`
@@ -17,7 +16,7 @@
 
 ## 1. Overview & Problem Statement
 
-Modern multi-channel e-commerce is fundamentally distributed and asynchronous. Orders, fulfillments, inventory, and tracking information flow across disjointed SaaS platforms (e.g., Shopify storefronts, 3PL warehouse management systems like ShipStation, ERPs, and carrier APIs).
+Modern multi-channel e-commerce is fundamentally distributed and asynchronous. Orders, fulfillment, shipment, and tracking data move across Shopify, ShipStation, and warehouse/3PL systems.
 
 At integration boundaries, failure is inevitable:
 - **Webhook Drops & Out-of-Order Delivery**: Shipments are created before fulfillment orders are acknowledged, or tracking numbers fail to register in the storefront.
@@ -58,9 +57,9 @@ flowchart LR
 Reloop enforces a clean separation of concerns between durable storage, distributed execution, and client visualization:
 
 - **PostgreSQL = Durable Source of Truth**: All tenant models, external orders, integration events, recovery cases, workflows, approval gates, and flight recorder audit logs are stored durably with relational integrity.
-- **Redis = Dispatch, Coordination & Realtime Infrastructure**: Provides Redis Streams for work distribution, distributed Redlock leases for mutual exclusion, and Pub/Sub for lightweight invalidation signals. Redis is **not** treated as durable state of record.
+- **Redis = Dispatch, Coordination & Realtime Infrastructure**: Provides Redis Streams for work distribution, short-lived dispatch-deduplication markers, and Pub/Sub for lightweight invalidation signals. Redis is **not** treated as durable state of record.
 - **Scheduler = Durable Job Rediscovery**: Periodically sweeps PostgreSQL to discover eligible execution candidates, detect expired worker leases, and dispatch work into Redis Streams.
-- **Worker = Claim, Lease, Execute, Verify**: Atomically claims jobs from Redis Streams, holds a renewal lease, executes DAG steps idempotently, and independently verifies post-action consistency through authoritative adapter reads before writing final state to PostgreSQL. V1 recovery writes remain simulator-only.
+- **Worker = Claim, Lease, Execute, Verify**: Receives Redis Stream dispatches, atomically claims durable jobs in PostgreSQL, renews a PostgreSQL-backed lease with fencing checks, executes DAG steps idempotently, and independently verifies post-action consistency through authoritative adapter reads before writing final state to PostgreSQL. V1 recovery writes remain simulator-only.
 - **Realtime Notifications = Invalidation Signals**: WebSockets (via Socket.IO) transmit lightweight cache invalidation signals; the browser refetches authoritative state from REST endpoints backed by PostgreSQL.
 
 ```mermaid
@@ -79,7 +78,7 @@ flowchart TB
 
     subgraph MessagingStorage["Durable Storage & Concurrency Engine"]
         Postgres[("PostgreSQL 16 Database<br/>Authoritative Durable Source of Truth")]
-        RedisQueue[("Redis 7: Streams & Distributed Redlock<br/>Dispatch & Coordination Infrastructure")]
+        RedisQueue[("Redis 7: Streams & Dispatch Markers<br/>Coordination Infrastructure")]
         RedisPubSub[("Redis Pub/Sub<br/>Cache Invalidation Fanout")]
     end
 
@@ -92,7 +91,7 @@ flowchart TB
 
     subgraph IntegrationsExternal["Integration Adapters"]
         ShopifyConnector["@reloop/connector-shopify<br/>(OAuth, Webhook HMAC, REST/GraphQL)"]
-        ShipStationConnector["@reloop/connector-shipstation<br/>(API Key Auth, Rate Limiter, Polling)"]
+        ShipStationConnector["@reloop/connector-shipstation<br/>(API Key Auth, Rate Limiter, Triggered Sync)"]
         SimulatorConnector["@reloop/connector-simulator<br/>(Reverse Logistics & Fault Injection)"]
     end
 
@@ -101,7 +100,6 @@ flowchart TB
     API --> AuthGuards
     AuthGuards --> WebhookController
     WebhookController --> Postgres
-    WebhookController --> RedisQueue
     API <--> Postgres
     WSGateway <--> RedisPubSub
 
@@ -124,31 +122,30 @@ flowchart TB
 ## 4. Operational Invariant Pipelines
 
 ### A. Webhook Ingestion & Deduplication Pipeline
-Webhooks from external providers arrive unpredictably and may be retransmitted multiple times. Reloop guarantees deduplication and idempotency at the edge:
+Supported signed webhook sources can arrive unpredictably and may retransmit the same event. Reloop verifies provider-specific signatures and uses durable database uniqueness to make ingestion idempotent. Shopify and the simulator-backed adapter expose signed webhook paths in V1; ShipStation synchronization is triggered and does not use a native webhook path.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Provider as Upstream Provider (Shopify/3PL)
+    actor Provider as Supported Webhook Source
     participant Ingest as Webhook Ingestion Endpoint
     participant DB as PostgreSQL (Tenant Scoped)
-    participant Queue as Redis Job Queue
-    participant Worker as Background Worker
+    participant Scanner as Durable Event Scanner
+    participant Reconcile as Reconciliation Service
 
-    Provider->>Ingest: POST /webhooks/:provider (with HMAC Signature)
-    Ingest->>Ingest: Verify HMAC-SHA256 & Timestamp Freshness
-    alt Invalid Signature or Replay (>5m)
-        Ingest-->>Provider: 401 Unauthorized / 400 Bad Request
+    Provider->>Ingest: POST /webhooks/:provider (provider-specific signature)
+    Ingest->>Ingest: Verify provider-specific HMAC-SHA256 signature
+    alt Invalid Signature
+        Ingest-->>Provider: 401 Unauthorized
     else Valid Payload
-        Ingest->>DB: INSERT INTO integration_events ON CONFLICT (dedup_hash) DO NOTHING
+        Ingest->>DB: Persist IntegrationEvent with a unique provider event key
         alt Duplicate Event
             Ingest-->>Provider: 200 OK (Ignored Duplicate)
         else New Event
-            Ingest->>Queue: Push INGEST_EVENT Job
             Ingest-->>Provider: 202 Accepted { eventId }
-            Queue->>Worker: Consume Event
-            Worker->>DB: Parse Order / Shipment State
-            Worker->>Worker: Trigger Reconciliation Evaluation
+            Scanner->>DB: Claim an unprocessed event
+            Scanner->>DB: Update the tenant-scoped projection
+            Scanner->>Reconcile: Trigger targeted reconciliation
         end
     end
 ```
@@ -169,8 +166,8 @@ flowchart TD
 
     EvaluatePolicy -->|Low Risk / Safe Mode| ExecStep
 
-    ExecStep --> AcquireLock["Acquire Distributed Redlock (Entity Key)"]
-    AcquireLock --> SimulatorAction["Execute Simulator-Backed Recovery Action<br/>(Real Providers Remain Read-Only)"]
+    ExecStep --> ClaimLease["Claim and Fence Durable PostgreSQL Job Lease"]
+    ClaimLease --> SimulatorAction["Execute Simulator-Backed Recovery Action<br/>(Real Providers Remain Read-Only)"]
     SimulatorAction --> StepVerify["Step 3: VERIFY_STATE<br/>Case Status: VERIFYING"]
     StepVerify --> CrossQuery["Query Upstream Provider API"]
     CrossQuery --> ValidateCheck{"State Synchronized?"}
@@ -192,7 +189,7 @@ Reloop includes an operational web UI built with **Next.js 15.5 App Router**, **
 | **Operations Dashboard** (`/dashboard`) | Command center displaying open exceptions, pending human gates, blocked cases, and live system feed. | [`02-dashboard-overview.png`](docs/assets/screenshots/02-dashboard-overview.png) |
 | **Exception Queue** (`/exceptions`) | Multi-channel incident queue with multi-facet filtering (status, recovery level, incident type, provider). | [`03-exceptions-queue.png`](docs/assets/screenshots/03-exceptions-queue.png) |
 | **Recovery Detail & DAG View** (`/recoveries/[id]`) | DAG workflow visualization, interactive human approval gate with preview diff, and Flight Recorder audit trail. | [`04-recovery-detail.png`](docs/assets/screenshots/04-recovery-detail.png) |
-| **Cross-System Orders** (`/orders`) | Multi-provider order reconciliation view highlighting discrepancies between Shopify and warehouse systems. | [`05-orders-reconciliation.png`](docs/assets/screenshots/05-orders-reconciliation.png) |
+| **Cross-System Orders** (`/orders`) | Order reconciliation view highlighting discrepancies across Shopify, ShipStation, and warehouse/3PL records represented by configured adapters. | [`05-orders-reconciliation.png`](docs/assets/screenshots/05-orders-reconciliation.png) |
 | **Integrations Hub** (`/integrations`) | External adapter management, OAuth state, sync recency, safety guardrails (read-only mode enforcement). | [`06-integrations-hub.png`](docs/assets/screenshots/06-integrations-hub.png) |
 | **System Operational Health** (`/health`) | Infrastructure observability, component connectivity (Postgres, Redis), and provider rate-limit telemetry. | [`07-system-health.png`](docs/assets/screenshots/07-system-health.png) |
 | **Secure Authentication** (`/login`) | Tenant-isolated user authentication portal. | [`01-login-screen.png`](docs/assets/screenshots/01-login-screen.png) |
@@ -230,14 +227,12 @@ reloop/
 │   ├── database/               # Prisma Schema, Database Client & Migrations
 │   ├── integration-sdk/        # Base Connector interfaces, rate-limiters, safe wrappers
 │   ├── reconciliation-core/    # Discrepancy detection engine & comparison rules
-│   ├── workflow-core/          # Multi-step DAG orchestrator & state machine
-│   ├── common/                 # Logging, telemetry, encryption, Redlock primitives
-│   └── testing/                # Shared test fixtures, mock servers & harness utilities
+│   └── workflow-core/          # Multi-step DAG orchestrator & state machine
 └── connectors/
-    ├── connector-shopify/      # Shopify OAuth, REST/GraphQL clients, webhook verification
-    ├── connector-shipstation/  # ShipStation REST adapter, tracking sync, polling
-    ├── connector-simulator/    # Fault-injection engine & reverse logistics simulator
-    └── connector-generic-3pl/  # Generic 3PL contract specifications
+    ├── shopify/                # Shopify OAuth, REST/GraphQL clients, webhook verification
+    ├── shipstation/            # ShipStation read-only REST adapter and triggered sync
+    ├── simulator/              # Fault-injection engine & reverse logistics simulator
+    └── generic-3pl/            # Generic warehouse/3PL contract and adapter direction
 ```
 
 ---
@@ -251,8 +246,8 @@ reloop/
 
 ### Step 1: Clone & Install Dependencies
 ```bash
-git clone https://github.com/reloop-io/reloop.git
-cd reloop
+git clone https://github.com/arsi505/Reloop.git
+cd Reloop
 npm install
 ```
 
@@ -282,7 +277,7 @@ npm run db:migrate
 ### Step 5: Seed Synthetic Demonstration Data (Optional Local Navigation)
 Populate the database with synthetic demonstration data for UI inspection and navigation:
 ```bash
-npx ts-node scripts/seed-rich-demo-data.ts
+npx dotenv -e .env -e .env.example -- npx ts-node scripts/seed-rich-demo-data.ts
 ```
 
 ### Step 6: Start Applications
@@ -306,7 +301,7 @@ npm run dev --workspace=@reloop/simulator
 
 ### Demonstration Credentials
 > [!NOTE]
-> **LOCAL DEVELOPMENT DEMO ONLY**: These credentials access synthetic mock data generated by `scripts/seed-rich-demo-data.ts`. They are not for production use.
+> **LOCAL DEVELOPMENT / SYNTHETIC DATA ONLY**: These credentials access synthetic data generated by `scripts/seed-rich-demo-data.ts`. They are not for production use.
 - **URL**: `http://localhost:3100/login`
 - **Email**: `operator@reloop.test`
 - **Password**: `Password123!`
@@ -316,21 +311,21 @@ npm run dev --workspace=@reloop/simulator
 
 ## 8. Security & Tenancy Invariants
 
-Reloop is designed under a zero-trust multi-tenant model:
+Reloop applies a multi-tenant security model with explicit tenant scoping and conservative recovery controls:
 
-1. **Strict Tenant Data Isolation**: Every relational entity is constrained by `organizationId`. Queries enforce composite uniqueness (`@@unique([organizationId, ...])`). Cross-tenant access is prevented at both the ORM and guard levels.
+1. **Tenant Data Isolation**: Tenant-scoped domain entities carry `organizationId`; API guards and organization-scoped service queries protect access paths. Relevant domain identities and deduplication keys use organization-scoped uniqueness constraints. Global identity, membership, and execution-support models are not all tenant columns themselves.
 2. **Short-Lived Access Tokens & Rotation**:
    - Access tokens: Stateless JWT signed with HS256, 15-minute expiration.
-   - Refresh tokens: Secure, HTTP-only, `SameSite=Lax` cookies, single-use with cryptographic rotation and server-side revocation tables.
+   - Refresh tokens: `HttpOnly`, `SameSite=Lax` cookies (`Secure` in production), single-use with cryptographic rotation and server-side revocation tables.
 3. **Envelope Encryption for Third-Party Credentials**:
    - Upstream API keys, OAuth tokens, and secrets are encrypted at rest using AES-256-GCM with unique initialization vectors (`iv`) and authentication tags (`authTag`).
-4. **Webhook Signature Verification & Replay Protection**:
-   - Ingested webhooks require valid HMAC-SHA256 signatures matching the registered tenant provider secret.
-   - Ingestion enforces a 5-minute timestamp validity window to prevent replay attacks.
+4. **Webhook Signature Verification & Deduplication**:
+   - Shopify webhook requests are checked using Shopify's HMAC-SHA256/Base64 convention; simulator-backed webhook requests use their configured HMAC-SHA256/hex convention. Both comparisons are timing-safe.
+   - Persisted provider event identifiers and deduplication constraints prevent repeated delivery from producing duplicate event records or effects. ShipStation has no native webhook ingestion path in V1.
 5. **Human Operator Approval Gate**:
-   - Destructive or high-impact actions (e.g., initiating returns, manual fulfillments, cross-provider cancellations) cannot execute autonomously unless authorized by an authenticated operator with `ADMIN` or `OWNER` privileges.
-6. **Vulnerability-Free Core Dependencies**:
-   - Monorepo dependency audit reports **0 critical vulnerabilities**, validated under strict `npm audit` standards.
+   - Configured high-impact simulator recovery steps cannot execute autonomously unless authorized by an authenticated operator with `ADMIN` or `OWNER` privileges. Real Shopify and ShipStation mutation paths remain disabled in V1.
+6. **Dependency Security Audit**:
+   - The documentation audit on 2026-09-27 recorded `npm audit` with **17 known advisories**: 1 low, 9 moderate, 7 high, and 0 critical. Dependency remediation is outside this documentation-only correction.
 
 ---
 
@@ -356,13 +351,22 @@ Reloop is designed under a zero-trust multi-tenant model:
   - 100 events/sec target load passed with 0 drops.
   - Saturated load test: When 150 events/sec offered load was applied, the local ingestion endpoint saturated at ~107.8 accepted events/sec without data corruption or memory exhaustion (150 events/sec offered load was not supported on single-node local configuration; it saturated gracefully).
 - **Fault-Injection & Chaos Testing**:
-  - Redis connection loss: Automatic backoff reconnection, Redlock lease recovery, and zero in-flight task corruption.
-  - Worker process crash during execution: Heartbeat reaper detects abandoned claims and safely re-enqueues jobs without duplicate execution.
-  - Concurrent duplicate webhook storms: Ingestion deduplication hash drops 100% of duplicate payloads at the persistence layer.
-- **Automated Regression Suite**:
-  - 518 passing unit and integration tests across all 14 workspaces.
-  - 41 automated security matrix assertions verifying RBAC, CSRF, and tenant isolation.
-  - 100% TypeScript compile-time type safety with zero lint errors.
+  - Redis outage drill: PostgreSQL retained durable job state; restored dispatch completed with 0 duplicate effects.
+  - Worker crash before execution: expired PostgreSQL leases and Redis pending-entry recovery allowed a safe retry. An ambiguous crash during execution was blocked instead of blindly retried.
+  - Duplicate webhook drill: 19 repeated deliveries returned `ignored_duplicate`; one event row was retained and 0 duplicate business effects occurred.
+
+### Automated Release Verification
+
+| Gate | Recorded V1 release result |
+| :--- | :--- |
+| Root test suite | **PASS** — 46 suites, 482 tests, 0 failures |
+| API E2E | **PASS** — 10 suites, 150 tests, 0 failures |
+| Simulator E2E | **PASS** — 1 suite, 17 tests, 0 failures |
+| ESLint | **PASS** — 0 errors; 183 non-blocking warnings remain |
+| TypeScript typecheck | **PASS** |
+| Production build | **PASS** |
+
+The security audit matrix separately records **41/41 passing assertions** covering RBAC, CSRF, tenant isolation, webhook security, and configuration safeguards. These gates are reported separately because their test populations are not asserted to be mutually exclusive.
 
 ---
 
@@ -372,8 +376,11 @@ Reloop is designed under a zero-trust multi-tenant model:
 - **Local Benchmark Evidence**: Throughput and stress measurements were conducted on local developer hardware; performance under distributed multi-region cloud topologies will depend on network latency and provisioned IOPS.
 - **Single-Region Architecture**: The V1 architecture is designed for single-region deployments; active-active multi-region database replication is not implemented.
 - **Real Provider Credentials**: Live read-only integration smoke testing against real Shopify storefronts and ShipStation accounts requires valid developer credentials and merchant account permissions.
-- **Remaining Development Dependencies**: While runtime critical vulnerabilities are at 0, transitive dev-only dependencies report low/moderate advisories.
-- **V1 Recovery Scope**: Automated recovery actions in V1 are simulator-backed demonstrations of order-discrepancy, fulfillment-synchronization, and tracking-update workflows; real Shopify and ShipStation integrations remain read-only.
+- **Dependency Advisories**: The 2026-09-27 documentation audit recorded 17 `npm audit` advisories (1 low, 9 moderate, 7 high, 0 critical); this documentation-only correction does not change dependencies.
+- **V1 Recovery Scope**: Automated recovery writes are simulator-backed demonstrations of order-discrepancy, fulfillment-synchronization, and tracking-update workflows. Real Shopify and ShipStation mutations are disabled; their implemented integration paths are read-only.
+- **ShipStation Ingestion**: ShipStation has no native webhook ingestion path in V1. Its read-only synchronization is explicitly triggered.
+- **Provider Sync Scheduling**: Reloop's scheduler rediscovers and dispatches durable internal jobs; V1 does not include an automatic periodic provider-sync cron.
+- **Warehouse/3PL Breadth**: The generic warehouse/3PL connector is a contract and adapter direction, not a claim of universal live warehouse-platform support.
 
 ### V1 Non-Goals (Explicitly Out of Scope)
 The following capabilities are deliberately outside the scope of Reloop V1:
@@ -396,10 +403,10 @@ The following capabilities are deliberately outside the scope of Reloop V1:
 
 - **Monorepo Management**: npm Workspaces
 - **Backend Framework**: NestJS, Express, Socket.IO
-- **Frontend Framework**: Next.js 15.5 (App Router), React 18, Tailwind CSS, Lucide Icons
-- **Database & Modeling**: PostgreSQL 16, Prisma ORM
-- **Queue & Coordination**: Redis 7 Streams, IORedis, Redlock
-- **Language & Runtime**: TypeScript 5.7, Node.js 20+
+- **Frontend Framework**: Next.js 15.5 (App Router), React 18, Tailwind CSS, custom SVG icon system
+- **Database & Modeling**: PostgreSQL 16, Prisma ORM 6.19
+- **Queue & Coordination**: Redis 7 Streams, IORedis, PostgreSQL lease/fencing state
+- **Language & Runtime**: TypeScript 5.9, Node.js 20+
 - **Security & Cryptography**: Argon2, Node Crypto (AES-256-GCM, HMAC-SHA256)
 - **Containerization**: Docker, Docker Compose
 
@@ -410,6 +417,10 @@ The following capabilities are deliberately outside the scope of Reloop V1:
 - [System Architecture Specification](docs/architecture.md): Topology, component responsibilities, and failure mode analysis.
 - [Manual Acceptance Testing Runbook](docs/manual-acceptance-test.md): Human acceptance test protocol for Day 24 validation.
 - [Release Checklist](docs/release-checklist.md): Pre-release milestone tracking and verification gates.
+- [Reliability Benchmark](docs/reliability-benchmark.md): Reproducible local throughput, duplicate-delivery, outage, and crash-drill evidence.
+- [Security Model](docs/security-model.md): Implemented tenant, authentication, webhook, and operational security controls.
+- [Shopify Integration](docs/shopify-integration.md): OAuth, signed webhook, read-sync, and read-only safety boundaries.
+- [ShipStation Integration](docs/shipstation-integration.md): API-key authentication, triggered read-sync, reconciliation, and write fences.
 - [Portfolio & Engineering Notes](docs/portfolio-notes.md): Technical deep-dive and architectural rationale for interviews.
 
 ---
