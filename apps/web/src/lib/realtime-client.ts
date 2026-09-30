@@ -15,6 +15,7 @@ class RealtimeClient {
   private statusHandlers = new Set<ConnectionStatusHandler>();
   private reconnectAttempts = 0;
   private hasPendingInvalidationWhileHidden = false;
+  private authRecoveryPromise: Promise<void> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -36,7 +37,7 @@ class RealtimeClient {
     return this.status;
   }
 
-  public connect(): void {
+  public connect(forceReconnect = false): void {
     if (typeof window === 'undefined') return;
 
     const token = getAccessToken();
@@ -45,7 +46,10 @@ class RealtimeClient {
       return;
     }
 
-    if (this.socket && this.socket.connected) {
+    // A Socket.IO instance owns its own handshake/reconnect lifecycle. Recreating
+    // it while it is connecting causes disconnect/reconnect churn and duplicate
+    // auth traffic under React remounts.
+    if (this.socket && !forceReconnect) {
       return;
     }
 
@@ -93,26 +97,8 @@ class RealtimeClient {
       this.setStatus('RECONNECTING');
     });
 
-    this.socket.on('auth:expired', async () => {
-      this.setStatus('RECONNECTING');
-      const refreshedToken = await refreshAccessTokenSingleFlight();
-      if (refreshedToken) {
-        this.connect();
-      } else {
-        this.setStatus('DISCONNECTED');
-        this.disconnect();
-      }
-    });
-
-    this.socket.on('auth_error', async () => {
-      const refreshedToken = await refreshAccessTokenSingleFlight();
-      if (refreshedToken) {
-        this.connect();
-      } else {
-        this.setStatus('DISCONNECTED');
-        this.disconnect();
-      }
-    });
+    this.socket.on('auth:expired', () => this.recoverSocketAuthentication());
+    this.socket.on('auth_error', () => this.recoverSocketAuthentication());
 
     // Handle incoming typed operational invalidation event
     this.socket.on('realtime:event', (notification: RealtimeNotification) => {
@@ -129,6 +115,22 @@ class RealtimeClient {
       this.socket = null;
     }
     this.setStatus('DISCONNECTED');
+  }
+
+  private recoverSocketAuthentication(): void {
+    if (this.authRecoveryPromise) return;
+
+    this.authRecoveryPromise = (async () => {
+      this.setStatus('RECONNECTING');
+      const refreshedToken = await refreshAccessTokenSingleFlight();
+      if (refreshedToken) {
+        this.connect(true);
+      } else {
+        this.disconnect();
+      }
+    })().finally(() => {
+      this.authRecoveryPromise = null;
+    });
   }
 
   public subscribe(handler: RealtimeEventHandler): () => void {

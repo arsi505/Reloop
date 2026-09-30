@@ -14,14 +14,19 @@ import {
 import { apiClient, ExceptionsQuery } from '../../lib/api-client';
 import { useRealtimeEvent } from '../../context/realtime-context';
 import { StatusBadge } from '../ui/StatusBadge';
+import { ExceptionSystemBadge } from '../ui/ExceptionSystemBadge';
 import { TableRowSkeleton } from '../ui/Skeleton';
 import { ErrorState } from '../ui/ErrorState';
 import { EmptyState } from '../ui/EmptyState';
-import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
+import { RefreshControl } from './OperationalPageHeader';
 import {
-  ProviderIcon,
   SearchIcon,
   ChevronDownIcon,
+  ArrowRightIcon,
+  XIcon,
+  ExceptionsIcon,
+  RefreshIcon,
+  ShieldIcon,
 } from '../icons/Icons';
 
 interface ExceptionsViewProps {
@@ -154,31 +159,65 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
     setPage(1);
   };
 
+  const visibleItems = data?.items ?? [];
+  const recoveringCount = visibleItems.filter((item) =>
+    ['RECOVERING', 'AUTO_RECOVERING', 'INVESTIGATING'].includes(item.status),
+  ).length;
+  const blockedCount = visibleItems.filter((item) => item.status === 'BLOCKED').length;
+
+  const activeFilterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (debouncedSearch) activeFilterChips.push({ key: 'search', label: `Search: ${debouncedSearch}`, clear: () => { setSearchInput(''); setDebouncedSearch(''); setPage(1); } });
+  if (status) activeFilterChips.push({ key: 'status', label: formatFilterLabel(status), clear: () => { setStatus(''); setPage(1); } });
+  if (recoveryLevel) activeFilterChips.push({ key: 'recovery', label: formatFilterLabel(recoveryLevel), clear: () => { setRecoveryLevel(''); setPage(1); } });
+  if (caseType) activeFilterChips.push({ key: 'type', label: formatFilterLabel(caseType), clear: () => { setCaseType(''); setPage(1); } });
+  if (provider) activeFilterChips.push({ key: 'provider', label: formatFilterLabel(provider), clear: () => { setProvider(''); setPage(1); } });
+
+  const filterControlClass = 'h-10 w-full appearance-none rounded-lg border border-reloop-line bg-reloop-paper pl-3 pr-8 text-xs font-medium text-reloop-ink outline-none transition-all hover:border-reloop-line-strong focus:border-reloop-signal/50 focus:bg-reloop-surface focus:ring-2 focus:ring-reloop-signal/10';
+
   return (
-    <div className="operations-view mx-auto max-w-[1440px] space-y-7">
-      {/* Header */}
-      <OperationalPageHeader
-        index="02"
-        eyebrow="OPERATOR ATTENTION / LIVE QUEUE"
-        title="Exception queue."
-        description="Cross-system discrepancies and integrity anomalies, ordered for clear operator judgment."
-        actions={<>
+    <div className="operations-view mx-auto max-w-[1440px] space-y-5">
+      {/* Compact operational context */}
+      <header className="flex flex-col gap-4 border-b border-reloop-line pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="brand-data text-[10px] font-semibold tracking-[0.1em] text-reloop-signal-hover">OPERATIONAL TRIAGE</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-reloop-muted">
+            {loading ? 'Loading exception activity…' : `${data?.total ?? 0} exceptions in the current queue, ordered by what needs operator attention.`}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {hasActiveFilters && (
             <button
               onClick={handleResetFilters}
-              className="px-2 text-xs font-semibold text-reloop-signal-hover hover:underline"
+              className="h-10 rounded-lg px-3 text-xs font-semibold text-reloop-signal-hover transition-colors hover:bg-reloop-signal-soft"
             >
               Reset filters
             </button>
           )}
           <RefreshControl loading={loading} onClick={fetchExceptions} />
-        </>}
-      />
+        </div>
+      </header>
+
+      {/* Queue summary */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" aria-label="Exception queue summary">
+        <div className="rounded-xl border border-reloop-line bg-reloop-surface p-4 shadow-subtle">
+          <div className="flex items-center justify-between"><span className="text-xs font-medium text-reloop-muted">Queue total</span><ExceptionsIcon size={14} className="text-reloop-signal shrink-0" /></div>
+          <p className="mt-2 font-display text-3xl font-[620] tracking-[-0.04em] text-reloop-ink">{loading ? '—' : data?.total ?? 0}</p>
+        </div>
+        <div className="rounded-xl border border-reloop-line bg-reloop-surface p-4 shadow-subtle">
+          <div className="flex items-center justify-between"><span className="text-xs font-medium text-reloop-muted">Recovering</span><RefreshIcon size={14} className="text-[#315e73] shrink-0" /></div>
+          <p className="mt-2 font-display text-3xl font-[620] tracking-[-0.04em] text-[#315e73]">{loading ? '—' : recoveringCount}</p>
+        </div>
+        <div className="rounded-xl border border-reloop-line bg-reloop-surface p-4 shadow-subtle">
+          <div className="flex items-center justify-between"><span className="text-xs font-medium text-reloop-muted">Blocked</span><ShieldIcon size={14} className="text-reloop-critical shrink-0" /></div>
+          <p className="mt-2 font-display text-3xl font-[620] tracking-[-0.04em] text-reloop-critical">{loading ? '—' : blockedCount}</p>
+        </div>
+      </div>
 
       {/* Filter Toolbar */}
-      <div className="operations-toolbar flex flex-wrap items-center gap-3 border border-reloop-line bg-reloop-surface p-3.5 text-xs">
+      <div className="operations-toolbar rounded-xl border border-reloop-line bg-reloop-surface p-3 shadow-subtle">
+        <div className="grid gap-2.5 lg:grid-cols-2 xl:grid-cols-[minmax(240px,1.5fr)_repeat(4,minmax(135px,1fr))]">
         {/* Search Input (Debounced) */}
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative min-w-0">
           <SearchIcon
             size={14}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a1a1aa]"
@@ -188,12 +227,12 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
             placeholder="Search by summary, order #, dedupe key..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-[#18181b] placeholder-[#a1a1aa] focus:outline-none focus:bg-white focus:border-[#d4d4d8]"
+            className="h-10 w-full rounded-lg border border-reloop-line bg-reloop-paper pl-9 pr-3 text-xs text-reloop-ink outline-none transition-all placeholder:text-reloop-faint hover:border-reloop-line-strong focus:border-reloop-signal/50 focus:bg-reloop-surface focus:ring-2 focus:ring-reloop-signal/10"
           />
         </div>
 
         {/* Status Filter */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <select
             value={status}
             onChange={(e) => {
@@ -201,7 +240,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
               setPage(1);
             }}
             aria-label="Filter by Status"
-            className="appearance-none pl-3 pr-8 py-1.5 bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-xs font-medium text-[#18181b] focus:outline-none cursor-pointer"
+            className={filterControlClass}
           >
             <option value="">All Statuses</option>
             <option value="DETECTED">Detected</option>
@@ -219,7 +258,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
         </div>
 
         {/* Recovery Level Filter */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <select
             value={recoveryLevel}
             onChange={(e) => {
@@ -227,7 +266,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
               setPage(1);
             }}
             aria-label="Filter by Recovery Level"
-            className="appearance-none pl-3 pr-8 py-1.5 bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-xs font-medium text-[#18181b] focus:outline-none cursor-pointer"
+            className={filterControlClass}
           >
             <option value="">All Recovery Levels</option>
             <option value="AUTO_INVESTIGATE">Auto Investigate</option>
@@ -243,7 +282,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
         </div>
 
         {/* Case Type Filter */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <select
             value={caseType}
             onChange={(e) => {
@@ -251,7 +290,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
               setPage(1);
             }}
             aria-label="Filter by Incident Type"
-            className="appearance-none pl-3 pr-8 py-1.5 bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-xs font-medium text-[#18181b] focus:outline-none cursor-pointer"
+            className={filterControlClass}
           >
             <option value="">All Incident Types</option>
             <option value="DUPLICATE_PURCHASE">Duplicate Purchase</option>
@@ -270,7 +309,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
         </div>
 
         {/* Provider Filter */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <select
             value={provider}
             onChange={(e) => {
@@ -278,7 +317,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
               setPage(1);
             }}
             aria-label="Filter by Provider"
-            className="appearance-none pl-3 pr-8 py-1.5 bg-[#fbfbfa] border border-[#ececeb] rounded-lg text-xs font-medium text-[#18181b] focus:outline-none cursor-pointer"
+            className={filterControlClass}
           >
             <option value="">All Providers</option>
             <option value="SHOPIFY">Shopify</option>
@@ -289,6 +328,18 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
             size={12}
             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717a] pointer-events-none"
           />
+        </div>
+        </div>
+
+        <div className="mt-3 flex min-h-6 flex-wrap items-center gap-2 border-t border-reloop-line/70 pt-3">
+          <span className="mr-1 text-[11px] font-medium text-reloop-muted">{loading ? 'Updating…' : `${data?.total ?? 0} results`}</span>
+          {activeFilterChips.length === 0 ? (
+            <span className="text-[11px] text-reloop-faint">No filters applied</span>
+          ) : activeFilterChips.map((chip) => (
+            <button key={chip.key} type="button" onClick={chip.clear} className="inline-flex h-6 items-center gap-1.5 rounded-md border border-reloop-line bg-reloop-paper px-2 text-[10px] font-semibold text-reloop-muted transition-colors hover:border-reloop-line-strong hover:text-reloop-ink">
+              {chip.label}<XIcon size={10} />
+            </button>
+          ))}
         </div>
       </div>
 
@@ -303,10 +354,61 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
 
       {/* Table Card */}
       {!error && (
-        <div className="operations-table overflow-hidden border border-reloop-line bg-reloop-surface">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
+        <div className="operations-table overflow-hidden rounded-xl border border-reloop-line bg-reloop-surface shadow-card">
+          {/* Compact card rows keep the queue readable in narrow workspaces. */}
+          <div className="divide-y divide-reloop-line xl:hidden">
+            {loading ? (
+              Array.from({ length: 3 }).map((_, index) => (
+                <div key={index} className="animate-pulse p-4">
+                  <div className="h-3 w-3/4 rounded bg-reloop-line" />
+                  <div className="mt-3 h-6 w-1/2 rounded bg-reloop-paper" />
+                </div>
+              ))
+            ) : !data || data.items.length === 0 ? (
+              <div className="py-10">
+                <EmptyState
+                  title={hasActiveFilters ? 'No matching exceptions' : 'No active exceptions'}
+                  description={hasActiveFilters ? 'No exceptions match the selected filters.' : 'All systems operational. No exceptions detected in this organization.'}
+                />
+              </div>
+            ) : data.items.map((item) => (
+              <article
+                key={item.id}
+                role="link"
+                tabIndex={0}
+                onClick={() => onInspectException ? onInspectException(item.id) : router.push(`/exceptions/${item.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') onInspectException ? onInspectException(item.id) : router.push(`/exceptions/${item.id}`);
+                }}
+                className="group cursor-pointer p-4 transition-colors hover:bg-reloop-paper focus-visible:bg-reloop-paper focus-visible:outline-none"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold leading-5 text-reloop-ink transition-colors group-hover:text-reloop-signal-hover">{item.summary}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {item.order && <span className="brand-data text-[10px] font-semibold text-reloop-muted">#{item.order.orderNumber}</span>}
+                      <ExceptionSystemBadge type={item.type} provider={item.provider} />
+                    </div>
+                  </div>
+                  <ArrowRightIcon size={16} className="mt-1 shrink-0 text-reloop-faint transition-transform group-hover:translate-x-0.5 group-hover:text-reloop-signal" />
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <StatusBadge status={item.recoveryLevel} size="sm" showDot={false} />
+                  <StatusBadge status={item.status} size="sm" />
+                  <span className="ml-auto whitespace-nowrap text-[10px] text-reloop-faint">
+                    {new Date(item.detectedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="hidden overflow-x-auto xl:block">
+            <table className="w-full table-fixed text-left text-xs">
+              <colgroup>
+                <col className="w-[32%]" /><col className="w-[9%]" /><col className="w-[13%]" /><col className="w-[15%]" /><col className="w-[12%]" /><col className="w-[13%]" /><col className="w-[6%]" />
+              </colgroup>
+              <thead className="sticky top-0 z-[5]">
                 <tr className="border-b border-[#ececeb] text-[#71717a] bg-[#fbfbfa]">
                   <th className="py-2.5 px-4 font-medium">Issue / Discrepancy</th>
                   <th className="py-2.5 px-4 font-medium">Order #</th>
@@ -353,12 +455,18 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
                   data.items.map((item) => (
                     <tr
                       key={item.id}
-                      className="hover:bg-[#fbfbfa] transition-colors group"
+                      tabIndex={0}
+                      onClick={() => onInspectException ? onInspectException(item.id) : router.push(`/exceptions/${item.id}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') onInspectException ? onInspectException(item.id) : router.push(`/exceptions/${item.id}`);
+                      }}
+                      className="group cursor-pointer transition-colors hover:bg-reloop-paper focus-visible:bg-reloop-paper focus-visible:outline-none"
                     >
                       <td className="py-3 px-4">
                         <Link
                           href={`/exceptions/${item.id}`}
-                          className="font-medium text-[#18181b] hover:text-[#f95721] line-clamp-1 block"
+                          onClick={(event) => event.stopPropagation()}
+                          className="block line-clamp-1 font-semibold text-reloop-ink hover:text-reloop-signal-hover"
                         >
                           {item.summary}
                         </Link>
@@ -370,7 +478,8 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
                         {item.order ? (
                           <Link
                             href={`/orders/${item.order.id}`}
-                            className="hover:text-[#f95721] hover:underline"
+                            onClick={(event) => event.stopPropagation()}
+                            className="hover:text-reloop-signal-hover hover:underline"
                           >
                             #{item.order.orderNumber}
                           </Link>
@@ -379,11 +488,7 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        {item.provider ? (
-                          <ProviderIcon provider={item.provider} />
-                        ) : (
-                          <span className="text-[#a1a1aa]">—</span>
-                        )}
+                        <ExceptionSystemBadge type={item.type} provider={item.provider} />
                       </td>
                       <td className="py-3 px-4">
                         <StatusBadge status={item.recoveryLevel} size="sm" showDot={false} />
@@ -402,17 +507,20 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
                       <td className="py-3 px-4 text-right">
                         {onInspectException ? (
                           <button
-                            onClick={() => onInspectException(item.id)}
-                            className="px-2.5 py-1 rounded bg-[#f4f4f5] hover:bg-white hover:border hover:border-[#ececeb] text-[11px] font-medium text-[#18181b] transition-all"
+                            onClick={(event) => { event.stopPropagation(); onInspectException(item.id); }}
+                            aria-label="Inspect exception"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-reloop-faint transition-all hover:bg-reloop-paper hover:text-reloop-signal"
                           >
-                            Inspect
+                            <ArrowRightIcon size={14} />
                           </button>
                         ) : (
                           <Link
                             href={`/exceptions/${item.id}`}
-                            className="px-2.5 py-1 rounded bg-[#f4f4f5] hover:bg-white hover:border hover:border-[#ececeb] text-[11px] font-medium text-[#18181b] transition-all inline-block"
+                            onClick={(event) => event.stopPropagation()}
+                            aria-label="Inspect exception"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-reloop-faint transition-all hover:bg-reloop-paper hover:text-reloop-signal"
                           >
-                            Inspect
+                            <ArrowRightIcon size={14} />
                           </Link>
                         )}
                       </td>
@@ -454,4 +562,12 @@ export function ExceptionsView({ onInspectException }: ExceptionsViewProps) {
       )}
     </div>
   );
+}
+
+function formatFilterLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }

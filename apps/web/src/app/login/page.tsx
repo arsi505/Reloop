@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/auth-context';
 import { AuthShell } from '../../components/auth/AuthShell';
+import { ApiError } from '../../lib/api-client';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -19,7 +20,13 @@ export default function LoginPage() {
     try {
       await login({ email, password });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Login failed. Please verify your credentials.');
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? 'Invalid email or password.'
+          : err instanceof Error
+            ? err.message
+            : 'Login failed. Please verify your credentials.',
+      );
     } finally {
       setIsSubmitting(false);
     }
