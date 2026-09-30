@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/auth-context';
@@ -39,10 +39,37 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
   const { user, organization, role, logout } = useAuth();
   const realtimeStatus = useRealtimeStatus();
   const router = useRouter();
-  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [openProfileMenu, setOpenProfileMenu] = useState<'sidebar' | 'header' | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [infoModal, setInfoModal] = useState<{ title: string; desc: string } | null>(null);
+  const sidebarProfileMenuRef = useRef<HTMLDivElement>(null);
+  const headerProfileMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const closeProfileMenu = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        !sidebarProfileMenuRef.current?.contains(target) &&
+        !headerProfileMenuRef.current?.contains(target)
+      ) {
+        setOpenProfileMenu(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenProfileMenu(null);
+        setMobileMenuOpen(false);
+        setInfoModal(null);
+      }
+    };
+    document.addEventListener('mousedown', closeProfileMenu);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeProfileMenu);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
 
   const initials = user?.name
     ? user.name.split(' ').map((name) => name[0]).join('').slice(0, 2).toUpperCase()
@@ -71,15 +98,15 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
   const closeMobileNavigation = () => setMobileMenuOpen(false);
 
   const sidebarContent = (
-    <div className="relative flex h-full flex-col bg-reloop-ink text-reloop-paper">
-      <div className="pointer-events-none absolute inset-0 opacity-[0.035] brand-grid" />
-      <div className="relative flex min-h-0 flex-1 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col bg-[#1b1d19] text-reloop-paper">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.022] brand-grid" />
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="border-b border-white/10 px-6 py-6">
           <Link href="/dashboard" aria-label="Reloop operations overview"><BrandLockup tone="light" size="default" priority /></Link>
         </div>
 
         <div className="px-4 py-4">
-          <button type="button" className="flex w-full items-center justify-between border border-white/10 bg-white/[0.035] px-3.5 py-3 text-left transition-colors hover:bg-white/[0.06]">
+          <div className="flex w-full items-center rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-left shadow-sm">
             <span className="flex min-w-0 items-center gap-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-reloop-signal text-xs font-bold text-white">{organization?.name?.charAt(0).toUpperCase() || 'O'}</span>
               <span className="min-w-0">
@@ -87,8 +114,7 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
                 <span className="mt-1 block truncate text-xs font-semibold text-reloop-paper">{organization?.name || 'My Organization'}</span>
               </span>
             </span>
-            <ChevronDownIcon size={12} className="shrink-0 text-[#777970]" />
-          </button>
+          </div>
         </div>
 
         <nav className="px-4 pb-4" aria-label="Operations">
@@ -98,14 +124,14 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
               const active = activeTab === item.id;
               const Icon = item.icon;
               return (
-                <Link key={item.id} href={item.href} onClick={closeMobileNavigation} className={`group relative flex min-h-10 items-center justify-between px-3 text-sm transition-colors ${active ? 'bg-white/[0.08] text-white' : 'text-[#b8bab2] hover:bg-white/[0.045] hover:text-white'}`}>
+                <Link key={item.id} href={item.href} onClick={closeMobileNavigation} className={`group relative flex min-h-10 items-center justify-between rounded-lg px-3 text-sm transition-all ${active ? 'bg-white/[0.09] text-white shadow-sm' : 'text-[#b8bab2] hover:bg-white/[0.045] hover:text-white'}`}>
                   {active && <span className="absolute inset-y-0 left-0 w-[3px] bg-reloop-signal" />}
                   <span className="flex items-center gap-3">
                     <span className={`brand-data w-4 text-[10px] ${active ? 'text-reloop-signal' : 'text-[#777970]'}`}>{item.code}</span>
                     <Icon size={15} className={active ? 'text-reloop-paper' : 'text-[#777970] group-hover:text-reloop-paper'} />
                     <span className="font-medium">{item.label}</span>
                   </span>
-                  {item.badge !== undefined && <span className="brand-data min-w-5 bg-reloop-signal px-1.5 py-0.5 text-center text-[10px] font-semibold text-white">{item.badge}</span>}
+                  {item.badge !== undefined && <span className="brand-data min-w-5 rounded-md bg-reloop-signal px-1.5 py-0.5 text-center text-[10px] font-semibold text-white shadow-sm">{item.badge}</span>}
                 </Link>
               );
             })}
@@ -120,7 +146,7 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
             {secondaryNavItems.map((item) => {
               const Icon = item.icon;
               return (
-                <button key={item.id} type="button" onClick={() => { closeMobileNavigation(); setInfoModal({ title: item.label, desc: item.description }); }} className="group flex min-h-10 w-full items-center justify-between px-3 text-sm text-[#a7a99f] transition-colors hover:bg-white/[0.045] hover:text-white">
+                <button key={item.id} type="button" onClick={() => { closeMobileNavigation(); setInfoModal({ title: item.label, desc: item.description }); }} className="group flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-[#a7a99f] transition-colors hover:bg-white/[0.045] hover:text-white">
                   <span className="flex items-center gap-3"><span className="brand-data w-4 text-[10px] text-[#777970]">—</span><Icon size={15} className="text-[#777970] group-hover:text-reloop-paper" /><span>{item.label}</span></span>
                   <span className="brand-data text-[10px] tracking-[0.05em] text-[#777970]">{item.badge}</span>
                 </button>
@@ -130,26 +156,26 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
         </nav>
       </div>
 
-      <div className="relative border-t border-white/10 p-4">
-        <div className="mb-3 border border-white/10 bg-white/[0.035] p-3.5">
+      <div className="relative shrink-0 border-t border-white/10 p-4">
+        <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.035] p-3.5">
           <div className="flex items-center justify-between">
             <span className="brand-data flex items-center gap-2 text-[10px] font-semibold tracking-[0.07em] text-[#b8bab2]"><span className="h-1.5 w-1.5 bg-reloop-verified motion-breathe" />LIVE PROTECTION</span>
             <span className="brand-data text-[10px] text-[#777970]">V0.1.0</span>
           </div>
           <p className="mt-2 text-xs leading-5 text-[#92948c]">Cross-system integrity monitoring is active.</p>
         </div>
-        <div className="relative">
-          <button onClick={() => setShowUserMenu((visible) => !visible)} className="flex w-full items-center justify-between px-1 py-2 text-left">
+        <div className="relative" ref={sidebarProfileMenuRef}>
+          <button type="button" onClick={() => setOpenProfileMenu((menu) => menu === 'sidebar' ? null : 'sidebar')} aria-expanded={openProfileMenu === 'sidebar'} aria-haspopup="menu" className="flex w-full items-center justify-between px-1 py-2 text-left">
             <span className="flex min-w-0 items-center gap-3">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-reloop-signal/50 bg-reloop-signal/10 text-xs font-semibold text-reloop-signal">{initials}</span>
               <span className="min-w-0"><span className="block truncate text-xs font-semibold text-reloop-paper">{user?.name || 'Operator'}</span><span className="brand-data mt-1 block text-[10px] tracking-[0.05em] text-[#8f9189]">{role || 'VIEWER'}</span></span>
             </span>
             <ChevronDownIcon size={12} className="text-[#666860]" />
           </button>
-          {showUserMenu && (
-            <div className="absolute bottom-full left-0 right-0 z-30 mb-2 border border-white/10 bg-[#24251f] p-1 shadow-elevated">
+          {openProfileMenu === 'sidebar' && (
+            <div role="menu" className="absolute bottom-full left-0 right-0 z-30 mb-2 border border-white/10 bg-[#24251f] p-1 shadow-elevated">
               <div className="border-b border-white/10 px-3 py-2"><p className="truncate text-xs font-medium">{user?.email}</p></div>
-              <button onClick={() => { setShowUserMenu(false); logout(); }} className="mt-1 w-full px-3 py-2 text-left text-xs text-[#ff8e73] hover:bg-white/[0.05]">Sign out</button>
+              <button role="menuitem" onClick={() => { setOpenProfileMenu(null); logout(); }} className="mt-1 w-full px-3 py-2 text-left text-xs text-[#ff8e73] hover:bg-white/[0.05]">Sign out</button>
             </div>
           )}
         </div>
@@ -159,7 +185,7 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
 
   return (
     <div className="flex min-h-screen bg-reloop-canvas font-sans text-reloop-ink antialiased selection:bg-reloop-signal-soft selection:text-reloop-signal-hover">
-      <aside className="sticky top-0 z-20 hidden h-screen w-[276px] shrink-0 md:block">{sidebarContent}</aside>
+      <aside className="sticky top-0 z-20 hidden h-screen w-[252px] shrink-0 md:block">{sidebarContent}</aside>
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 flex md:hidden">
           <button aria-label="Close navigation menu" className="fixed inset-0 bg-reloop-ink/55 backdrop-blur-sm" onClick={closeMobileNavigation} />
@@ -180,20 +206,41 @@ export function AppShell({ children, activeTab, openExceptionsCount = 0 }: AppSh
           </div>
 
           <div className="flex items-center gap-2.5">
-            <div className={`hidden items-center gap-2 border px-2.5 py-1.5 brand-data text-[11px] font-semibold tracking-[0.05em] sm:flex ${realtimeStatus === 'CONNECTED' ? 'border-reloop-verified/25 bg-reloop-verified-soft text-reloop-verified' : realtimeStatus === 'RECONNECTING' ? 'border-reloop-warning/25 bg-reloop-warning-soft text-reloop-warning' : 'border-reloop-line bg-reloop-surface text-reloop-faint'}`}>
-              <span className={`h-1.5 w-1.5 ${realtimeStatus === 'CONNECTED' ? 'bg-reloop-verified motion-breathe' : realtimeStatus === 'RECONNECTING' ? 'bg-reloop-warning animate-pulse' : 'bg-reloop-faint'}`} />
-              {realtimeStatus === 'CONNECTED' ? 'LIVE' : realtimeStatus === 'RECONNECTING' ? 'SYNCING' : 'OFFLINE'}
+            <div
+              title={realtimeStatus === 'CONNECTED' ? 'Realtime connection active · Updated just now' : realtimeStatus === 'RECONNECTING' ? 'Restoring realtime connection' : 'Realtime connection unavailable'}
+              className={`hidden h-9 items-center gap-2 rounded-md border px-3 text-[11px] font-semibold shadow-subtle sm:flex ${realtimeStatus === 'CONNECTED' ? 'border-reloop-verified/20 bg-reloop-verified-soft text-reloop-verified' : realtimeStatus === 'RECONNECTING' ? 'border-reloop-warning/20 bg-reloop-warning-soft text-reloop-warning' : 'border-reloop-line bg-reloop-surface text-reloop-faint'}`}
+            >
+              <span className={`h-2 w-2 shrink-0 rounded-full ring-4 ${realtimeStatus === 'CONNECTED' ? 'bg-reloop-verified ring-reloop-verified/10 motion-breathe' : realtimeStatus === 'RECONNECTING' ? 'bg-reloop-warning ring-reloop-warning/10 animate-pulse' : 'bg-reloop-faint ring-reloop-faint/10'}`} />
+              {realtimeStatus === 'CONNECTED' ? 'Live' : realtimeStatus === 'RECONNECTING' ? 'Syncing' : 'Offline'}
             </div>
             <form onSubmit={handleSearchSubmit} className="relative hidden w-48 lg:block xl:w-64">
               <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-reloop-faint" />
               <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search operational records" className="h-9 w-full border border-reloop-line bg-reloop-surface pl-9 pr-9 text-xs outline-none transition-colors placeholder:text-reloop-faint focus:border-reloop-line-strong" />
               <span className="brand-data absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-reloop-faint">↵</span>
             </form>
-            <button title="Notifications" className="relative flex h-9 w-9 items-center justify-center border border-reloop-line bg-reloop-surface text-reloop-muted transition-colors hover:border-reloop-line-strong hover:text-reloop-ink">
-              <BellIcon size={15} />
-              {openExceptionsCount > 0 && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 bg-reloop-signal ring-2 ring-reloop-surface" />}
+            <button
+              type="button"
+              title={openExceptionsCount > 0 ? `${openExceptionsCount} open exception${openExceptionsCount === 1 ? '' : 's'}` : 'No open exceptions'}
+              aria-label={openExceptionsCount > 0 ? `View ${openExceptionsCount} open exception${openExceptionsCount === 1 ? '' : 's'}` : 'View open exceptions'}
+              onClick={() => router.push('/exceptions')}
+              className="relative flex h-9 w-9 items-center justify-center rounded-md border border-reloop-line bg-reloop-paper text-reloop-muted shadow-subtle transition-all hover:-translate-y-px hover:border-reloop-line-strong hover:text-reloop-ink hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-reloop-signal/30"
+            >
+              <BellIcon size={16} />
+              {openExceptionsCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-reloop-paper bg-reloop-signal px-1 text-[9px] font-bold leading-none text-white shadow-sm">
+                  {openExceptionsCount > 9 ? '9+' : openExceptionsCount}
+                </span>
+              )}
             </button>
-            <span className="hidden h-9 w-9 items-center justify-center bg-reloop-ink text-[10px] font-semibold text-reloop-paper sm:flex">{initials}</span>
+            <div className="relative hidden sm:block" ref={headerProfileMenuRef}>
+              <button type="button" title="Account menu" aria-label="Open account menu" aria-expanded={openProfileMenu === 'header'} aria-haspopup="menu" onClick={() => setOpenProfileMenu((menu) => menu === 'header' ? null : 'header')} className="flex h-9 w-9 items-center justify-center bg-reloop-ink text-[10px] font-semibold text-reloop-paper transition-opacity hover:opacity-85">{initials}</button>
+              {openProfileMenu === 'header' && (
+                <div role="menu" className="absolute right-0 top-full z-30 mt-2 w-56 border border-reloop-line bg-reloop-paper p-1 shadow-elevated">
+                  <div className="border-b border-reloop-line px-3 py-2"><p className="truncate text-xs font-semibold text-reloop-ink">{user?.name || 'Operator'}</p><p className="mt-1 truncate text-[11px] text-reloop-muted">{user?.email}</p></div>
+                  <button role="menuitem" onClick={() => { setOpenProfileMenu(null); logout(); }} className="mt-1 w-full px-3 py-2 text-left text-xs font-medium text-reloop-critical hover:bg-reloop-critical-soft">Sign out</button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-7 sm:py-8">{children}</main>

@@ -32,7 +32,7 @@ type RefreshControlProps = {
 
 export function RefreshControl({ loading, onClick, children = 'Refresh data' }: RefreshControlProps) {
   return (
-    <button onClick={onClick} disabled={loading} className="brand-button min-h-10 border border-reloop-line-strong bg-transparent px-3 text-reloop-ink hover:border-reloop-ink disabled:cursor-not-allowed disabled:opacity-50">
+    <button onClick={onClick} disabled={loading} className="brand-button min-h-10 whitespace-nowrap rounded-lg border border-reloop-line bg-reloop-surface px-3 text-reloop-ink shadow-subtle hover:border-reloop-line-strong hover:shadow-card disabled:cursor-not-allowed disabled:opacity-50">
       <svg className={loading ? 'animate-spin' : ''} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5" /></svg>
       <span>{children}</span>
     </button>

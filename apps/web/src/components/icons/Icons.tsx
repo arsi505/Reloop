@@ -1,4 +1,5 @@
 import React from 'react';
+import Image from 'next/image';
 
 interface IconProps extends React.SVGProps<SVGSVGElement> {
   size?: number;
@@ -278,13 +279,31 @@ export function ClockIcon({ size = 14, className = '' }: IconProps) {
   );
 }
 
+export function ProviderMark({ provider, size = 14 }: { provider: string; size?: number }) {
+  if (provider === 'SHOPIFY') {
+    return <Image src="/integrations/shopify-mark.svg" alt="" aria-hidden="true" width={Math.round(size * 0.88)} height={size} className="h-auto object-contain" />;
+  }
+
+  if (provider === 'SHIPSTATION') {
+    return <Image src="/integrations/shipstation-mark.svg" alt="" aria-hidden="true" width={size} height={size} className="object-contain" />;
+  }
+
+  const letter = provider === 'GENERIC_3PL' ? '3' : provider.charAt(0);
+  return (
+    <span aria-hidden="true" style={{ width: size, height: size, fontSize: Math.max(8, size - 6) }} className="flex shrink-0 items-center justify-center rounded-[3px] bg-[#55574f] font-bold leading-none text-white">
+      {letter}
+    </span>
+  );
+}
+
 export function ProviderIcon({ provider }: { provider: string }) {
   if (provider === 'SHOPIFY') {
     return (
       <span
         title="Shopify"
-        className="inline-flex items-center justify-center font-bold font-mono text-[10px] text-[#95BF47] bg-[#95BF47]/10 rounded px-1.5 py-0.5 border border-[#95BF47]/20"
+        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#86a93e]/25 bg-[#f2f7e8] px-2 py-1 text-[11px] font-semibold leading-none text-[#4f6f1f]"
       >
+        <ProviderMark provider={provider} />
         Shopify
       </span>
     );
@@ -293,18 +312,34 @@ export function ProviderIcon({ provider }: { provider: string }) {
     return (
       <span
         title="ShipStation"
-        className="inline-flex items-center justify-center font-bold font-mono text-[10px] text-[#1D71B8] bg-[#1D71B8]/10 rounded px-1.5 py-0.5 border border-[#1D71B8]/20"
+        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#1d71b8]/20 bg-[#edf5fb] px-2 py-1 text-[11px] font-semibold leading-none text-[#185d96]"
       >
+        <ProviderMark provider={provider} />
         ShipStation
       </span>
     );
   }
+
+  if (provider === 'SIMULATOR') {
+    return (
+      <span
+        title="Test simulator"
+        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#c9c7bf] bg-[#f3f2ee] px-2 py-1 text-[11px] font-semibold leading-none text-[#55574f]"
+      >
+        <ProviderMark provider={provider} />
+        Test simulator
+      </span>
+    );
+  }
+
+  const displayName = provider === 'GENERIC_3PL' ? 'Generic 3PL' : provider;
   return (
     <span
-      title={provider}
-      className="inline-flex items-center justify-center font-bold font-mono text-[10px] text-zinc-600 bg-zinc-100 rounded px-1.5 py-0.5 border border-zinc-200"
+      title={displayName}
+      className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-zinc-200 bg-zinc-100 px-2 py-1 text-[11px] font-semibold leading-none text-zinc-600"
     >
-      {provider}
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+      {displayName}
     </span>
   );
 }

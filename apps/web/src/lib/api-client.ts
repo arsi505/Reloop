@@ -37,6 +37,7 @@ export function setAccessToken(token: string | null): void {
 }
 
 let ongoingRefreshPromise: Promise<string | null> | null = null;
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
 async function executeRefresh(): Promise<string | null> {
   try {
@@ -82,7 +83,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function fetchWithAuth<T>(
+async function executeAuthenticatedRequest<T>(
   endpoint: string,
   options: RequestInit = {},
   isRetry = false,
@@ -113,7 +114,7 @@ export async function fetchWithAuth<T>(
   ) {
     const newToken = await refreshAccessTokenSingleFlight();
     if (newToken) {
-      return fetchWithAuth<T>(endpoint, options, true);
+      return executeAuthenticatedRequest<T>(endpoint, options, true);
     }
   }
 
@@ -135,6 +136,31 @@ export async function fetchWithAuth<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+/**
+ * Shares only simultaneous idempotent reads. This protects React StrictMode,
+ * remounts, and multiple consumers from issuing duplicate REST requests while
+ * preserving fresh reads after the original request settles.
+ */
+export function fetchWithAuth<T>(
+  endpoint: string,
+  options: RequestInit = {},
+  isRetry = false,
+): Promise<T> {
+  const method = (options.method || 'GET').toUpperCase();
+  if (method !== 'GET' || isRetry) {
+    return executeAuthenticatedRequest<T>(endpoint, options, isRetry);
+  }
+
+  const key = `${endpoint}|${JSON.stringify(options.headers || {})}`;
+  const existing = inFlightGetRequests.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  const request = executeAuthenticatedRequest<T>(endpoint, options)
+    .finally(() => inFlightGetRequests.delete(key));
+  inFlightGetRequests.set(key, request);
+  return request;
 }
 
 function buildQueryString<T extends object>(params?: T): string {

@@ -53,11 +53,14 @@ export function useRealtimeEvent(
   eventTypes: RealtimeEventType | RealtimeEventType[],
   callback: (event: RealtimeNotification) => void,
   coalesceMs = 300,
+  minimumRefreshIntervalMs = 10_000,
 ) {
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const trailingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingEventRef = useRef<RealtimeNotification | null>(null);
+  const lastInvocationAtRef = useRef(0);
 
   const eventTypesKey = Array.isArray(eventTypes) ? eventTypes.join(',') : eventTypes;
 
@@ -72,8 +75,22 @@ export function useRealtimeEvent(
         }
         timeoutRef.current = setTimeout(() => {
           if (pendingEventRef.current) {
-            callbackRef.current(pendingEventRef.current);
-            pendingEventRef.current = null;
+            const invoke = () => {
+              trailingTimeoutRef.current = null;
+              const event = pendingEventRef.current;
+              pendingEventRef.current = null;
+              if (event) {
+                lastInvocationAtRef.current = Date.now();
+                callbackRef.current(event);
+              }
+            };
+            const elapsed = Date.now() - lastInvocationAtRef.current;
+            if (elapsed >= minimumRefreshIntervalMs) {
+              invoke();
+            } else if (!trailingTimeoutRef.current) {
+              // Continuous server mutations result in at most one trailing REST refresh.
+              trailingTimeoutRef.current = setTimeout(invoke, minimumRefreshIntervalMs - elapsed);
+            }
           }
         }, coalesceMs);
       }
@@ -84,6 +101,9 @@ export function useRealtimeEvent(
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      if (trailingTimeoutRef.current) {
+        clearTimeout(trailingTimeoutRef.current);
+      }
     };
-  }, [eventTypesKey, coalesceMs]);
+  }, [eventTypesKey, coalesceMs, minimumRefreshIntervalMs]);
 }

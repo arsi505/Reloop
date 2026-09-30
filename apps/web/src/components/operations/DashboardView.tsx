@@ -21,6 +21,9 @@ import {
   CheckCircleIcon,
   AlertCircleIcon,
   ClockIcon,
+  SearchIcon,
+  ShieldIcon,
+  ExceptionsIcon,
 } from '../icons/Icons';
 
 interface DashboardViewProps {
@@ -185,7 +188,7 @@ export function DashboardView({
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
                 <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">01 / OPEN EXCEPTIONS</span>
-                <span className="w-2 h-2 rounded-full bg-[#f95721]" />
+                <ExceptionsIcon size={14} className="text-[#f95721] shrink-0" />
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-[#18181b]">
@@ -205,7 +208,7 @@ export function DashboardView({
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
                 <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">02 / NEEDS APPROVAL</span>
-                <span className="w-2 h-2 rounded-full bg-[#f59e0b]" />
+                <ClockIcon size={14} className="text-[#f59e0b] shrink-0" />
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-[#b45309]">
@@ -223,7 +226,7 @@ export function DashboardView({
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
                 <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">03 / BLOCKED CASES</span>
-                <span className="w-2 h-2 rounded-full bg-[#ef4444]" />
+                <ShieldIcon size={14} className="text-[#ef4444] shrink-0" />
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-[#b91c1c]">
@@ -241,7 +244,7 @@ export function DashboardView({
             <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
               <div className="flex items-center justify-between">
                 <span className="brand-data text-[11px] font-semibold tracking-[0.06em] text-reloop-muted">04 / RESOLVED CASES</span>
-                <span className="w-2 h-2 rounded-full bg-[#10b981]" />
+                <CheckCircleIcon size={14} className="text-[#10b981] shrink-0" />
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-[#047857]">
@@ -482,15 +485,15 @@ export function DashboardView({
                   integrations.map((integ) => (
                     <div
                       key={integ.id}
-                      className="p-2.5 rounded-lg bg-[#fbfbfa] border border-[#ececeb] flex items-center justify-between"
+                      className="p-2.5 rounded-lg bg-[#fbfbfa] border border-[#ececeb] flex items-center justify-between gap-2"
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
                         <ProviderIcon provider={integ.provider} />
-                        <div>
-                          <p className="font-medium text-xs text-[#18181b]">
+                        <div className="min-w-0">
+                          <p className="font-medium text-xs text-[#18181b] truncate">
                             {integ.name}
                           </p>
-                          <p className="text-[10px] text-[#71717a] font-mono">
+                          <p className="text-[10px] text-[#71717a] font-mono truncate">
                             {integ.provider === 'SHIPSTATION'
                               ? (integ.status === 'CONNECTED' ? 'Credential configured' : 'Not configured')
                               : integ.safeIdentifier}
@@ -528,7 +531,7 @@ export function DashboardView({
             <div className="space-y-3 text-xs">
               <div className="flex items-center justify-between py-1 border-b border-[#f4f4f5]">
                 <span className="flex items-center gap-2 text-[#52525b]">
-                  <span className="w-2 h-2 rounded-full bg-[#3b82f6]" />
+                  <SearchIcon size={13} className="text-[#3b82f6] shrink-0" />
                   Auto-Investigating
                 </span>
                 <span className="font-semibold text-[#18181b]">
@@ -538,7 +541,7 @@ export function DashboardView({
 
               <div className="flex items-center justify-between py-1 border-b border-[#f4f4f5]">
                 <span className="flex items-center gap-2 text-[#52525b]">
-                  <span className="w-2 h-2 rounded-full bg-[#f59e0b]" />
+                  <ClockIcon size={13} className="text-[#f59e0b] shrink-0" />
                   Awaiting Approval
                 </span>
                 <span className="font-semibold text-[#b45309]">
@@ -548,7 +551,7 @@ export function DashboardView({
 
               <div className="flex items-center justify-between py-1 border-b border-[#f4f4f5]">
                 <span className="flex items-center gap-2 text-[#52525b]">
-                  <span className="w-2 h-2 rounded-full bg-[#6366f1]" />
+                  <RefreshIcon size={13} className="text-[#6366f1] shrink-0" />
                   Auto-Recovering
                 </span>
                 <span className="font-semibold text-[#18181b]">
@@ -558,7 +561,7 @@ export function DashboardView({
 
               <div className="flex items-center justify-between py-1 border-b border-[#f4f4f5]">
                 <span className="flex items-center gap-2 text-[#52525b]">
-                  <span className="w-2 h-2 rounded-full bg-[#ef4444]" />
+                  <ShieldIcon size={13} className="text-[#ef4444] shrink-0" />
                   Blocked Cases
                 </span>
                 <span className="font-semibold text-[#b91c1c]">
@@ -568,7 +571,7 @@ export function DashboardView({
 
               <div className="flex items-center justify-between py-1">
                 <span className="flex items-center gap-2 text-[#52525b]">
-                  <span className="w-2 h-2 rounded-full bg-[#10b981]" />
+                  <CheckCircleIcon size={13} className="text-[#10b981] shrink-0" />
                   Resolved
                 </span>
                 <span className="font-semibold text-[#047857]">

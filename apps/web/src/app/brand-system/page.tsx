@@ -42,7 +42,7 @@ export default function BrandSystemPage() {
           <div className="brand-grid relative flex min-h-[500px] flex-col justify-between overflow-hidden bg-reloop-paper p-8 sm:p-12">
             <div className="flex justify-between brand-data text-[9px] tracking-[0.16em] text-reloop-faint"><span>SYSTEM SIGNAL</span><span>02 / ACTIVE</span></div>
             <div className="relative mx-auto w-full max-w-md">
-              <Image src="/brand/reloop-symbol-animated.svg" alt="Reloop reconcile mark" width={360} height={360} className="mx-auto w-[70%]" />
+              <Image src="/brand/reloop-symbol-animated.svg" alt="Reloop reconcile mark" width={360} height={360} className="mx-auto h-auto w-[70%]" />
               <div className="mt-10 grid grid-cols-3 gap-2 brand-data text-[8px] tracking-[0.12em] text-reloop-muted"><span>INPUT A</span><span className="text-center">RECONCILE</span><span className="text-right">VERIFIED</span></div>
             </div>
             <div className="flex items-center gap-2 brand-data text-[9px] tracking-[0.14em] text-reloop-verified"><span className="h-2 w-2 animate-signal-pulse rounded-full bg-reloop-signal" />FOUNDATION CONNECTED</div>

@@ -254,11 +254,11 @@ export const IntegrationsView: React.FC = () => {
               <thead>
                 <tr className="border-b border-[#ececeb] bg-[#fbfbfa]/75 text-[#71717a] font-medium select-none">
                   <th className="py-3 px-4">Provider</th>
-                  <th className="py-3 px-4">Account / Identifier</th>
+                  <th className="py-3 px-4 hidden md:table-cell">Account / Identifier</th>
                   <th className="py-3 px-4">Health Status</th>
-                  <th className="py-3 px-4">Mode</th>
-                  <th className="py-3 px-4">Last Sync</th>
-                  <th className="py-3 px-4">Last Safe Error</th>
+                  <th className="py-3 px-4 hidden lg:table-cell">Mode</th>
+                  <th className="py-3 px-4 hidden sm:table-cell">Last Sync</th>
+                  <th className="py-3 px-4 hidden lg:table-cell">Last Safe Error</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -295,15 +295,15 @@ export const IntegrationsView: React.FC = () => {
                       onClick={() => router.push(`/integrations/${item.id}`)}
                     >
                       {/* Provider */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-2">
+                      <td className="py-3.5 px-4 max-w-[180px] sm:max-w-none">
+                        <div className="flex items-center gap-2 min-w-0">
                           <ProviderIcon provider={item.provider} />
-                          <span className="font-semibold text-[#18181b]">{item.name}</span>
+                          <span className="font-semibold text-[#18181b] truncate">{item.name}</span>
                         </div>
                       </td>
 
                       {/* Identifier */}
-                      <td className="py-3.5 px-4 font-mono text-[11px] text-[#27272a]">
+                      <td className="py-3.5 px-4 font-mono text-[11px] text-[#27272a] hidden md:table-cell">
                         {item.provider === 'SHIPSTATION' ? (
                           item.status === 'CONNECTED' ? (
                             <span className="text-[#15803d] font-sans font-medium flex items-center gap-1.5">
@@ -321,19 +321,19 @@ export const IntegrationsView: React.FC = () => {
                       </td>
 
                       {/* Health Status */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-4 whitespace-nowrap">
                         <StatusBadge status={item.health} size="sm" />
                       </td>
 
                       {/* Mode: Strictly Read-Only */}
-                      <td className="py-3.5 px-4">
+                      <td className="py-3.5 px-4 hidden lg:table-cell">
                         <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#f4f4f5] text-[#52525b] border border-[#e4e4e7]">
                           Read only
                         </span>
                       </td>
 
                       {/* Last Sync */}
-                      <td className="py-3.5 px-4 text-[#71717a] font-mono text-[11px]">
+                      <td className="py-3.5 px-4 text-[#71717a] font-mono text-[11px] hidden sm:table-cell">
                         {item.lastSuccessfulSync
                           ? new Date(item.lastSuccessfulSync).toLocaleString([], {
                               month: 'short',
@@ -345,7 +345,7 @@ export const IntegrationsView: React.FC = () => {
                       </td>
 
                       {/* Last Safe Error */}
-                      <td className="py-3.5 px-4 max-w-xs truncate">
+                      <td className="py-3.5 px-4 max-w-xs truncate hidden lg:table-cell">
                         {item.lastError ? (
                           <div className="flex items-center gap-1.5 text-[#dc2626]" title={item.lastError.summary}>
                             <AlertTriangleIcon size={12} className="shrink-0" />

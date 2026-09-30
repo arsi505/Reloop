@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/auth-context';
-import { apiClient } from '../../lib/api-client';
 import { AppShell } from '../../components/layout/AppShell';
 import { DashboardView } from '../../components/operations/DashboardView';
 import { RecoveryDetailDrawer } from '../../components/operations/RecoveryDetailDrawer';
@@ -19,15 +18,6 @@ export default function DashboardRoutePage() {
       router.push('/login');
     }
   }, [isLoading, isAuthenticated, router]);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      apiClient
-        .getDashboardSummary()
-        .then((data) => setOpenExceptionsCount(data.openExceptionsCount))
-        .catch(() => {});
-    }
-  }, [isAuthenticated]);
 
   if (isLoading || !user) {
     return (
@@ -49,6 +39,7 @@ export default function DashboardRoutePage() {
       />
       <DashboardView
         userName={user.name}
+        onOpenExceptionsCountChange={setOpenExceptionsCount}
         onInspectException={(id) => router.push(`/exceptions/${id}`)}
         onInspectWorkflow={(wfId) => router.push(`/recoveries/${wfId}`)}
       />

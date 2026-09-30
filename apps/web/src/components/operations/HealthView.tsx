@@ -12,6 +12,10 @@ import { OperationalPageHeader, RefreshControl } from './OperationalPageHeader';
 import {
   ProviderIcon,
   ArrowRightIcon,
+  IntegrationsIcon,
+  CheckCircleIcon,
+  AlertCircleIcon,
+  ShieldIcon,
 } from '../icons/Icons';
 
 export const HealthView: React.FC = () => {
@@ -82,7 +86,7 @@ export const HealthView: React.FC = () => {
                 <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-[#71717a]">Total Integrations</span>
-                    <span className="w-2 h-2 rounded-full bg-[#18181b]" />
+                    <IntegrationsIcon size={14} className="text-[#18181b] shrink-0" />
                   </div>
                   <p className="text-2xl font-bold text-[#18181b] tracking-tight">
                     {integrations.length}
@@ -93,7 +97,7 @@ export const HealthView: React.FC = () => {
                 <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-[#71717a]">Healthy Adapters</span>
-                    <span className="w-2 h-2 rounded-full bg-[#10b981]" />
+                    <CheckCircleIcon size={14} className="text-[#10b981] shrink-0" />
                   </div>
                   <p className="text-2xl font-bold text-[#10b981] tracking-tight">
                     {healthyCount}
@@ -104,7 +108,7 @@ export const HealthView: React.FC = () => {
                 <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-[#71717a]">Degraded Adapters</span>
-                    <span className="w-2 h-2 rounded-full bg-[#f59e0b]" />
+                    <AlertCircleIcon size={14} className="text-[#f59e0b] shrink-0" />
                   </div>
                   <p className="text-2xl font-bold text-[#f59e0b] tracking-tight">
                     {degradedCount}
@@ -115,7 +119,7 @@ export const HealthView: React.FC = () => {
                 <div className="p-4 rounded-xl bg-white border border-[#ececeb] shadow-subtle space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-[#71717a]">Safety Protection</span>
-                    <span className="w-2 h-2 rounded-full bg-[#f95721]" />
+                    <ShieldIcon size={14} className="text-[#f95721] shrink-0" />
                   </div>
                   <p className="text-2xl font-bold text-[#18181b] tracking-tight">
                     Active
@@ -140,11 +144,11 @@ export const HealthView: React.FC = () => {
                 <thead>
                   <tr className="border-b border-[#ececeb] text-[#71717a] font-medium">
                     <th className="py-2.5 px-3">Provider</th>
-                    <th className="py-2.5 px-3">Account Domain</th>
-                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 hidden md:table-cell">Account Domain</th>
+                    <th className="py-2.5 px-3 hidden md:table-cell">Status</th>
                     <th className="py-2.5 px-3">Health Status</th>
-                    <th className="py-2.5 px-3">Last Sync</th>
-                    <th className="py-2.5 px-3 text-right">Action</th>
+                    <th className="py-2.5 px-3 hidden sm:table-cell">Last Sync</th>
+                    <th className="py-2.5 px-3 text-right hidden sm:table-cell">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f4f4f5]">
@@ -157,29 +161,29 @@ export const HealthView: React.FC = () => {
                   ) : (
                     integrations.map((item) => (
                       <tr key={item.id} className="hover:bg-[#fbfbfa]">
-                        <td className="py-3 px-3">
-                          <div className="flex items-center gap-2">
+                        <td className="py-3 px-3 max-w-[180px] sm:max-w-none">
+                          <div className="flex items-center gap-2 min-w-0">
                             <ProviderIcon provider={item.provider} />
-                            <span className="font-semibold text-[#18181b]">{item.name}</span>
+                            <span className="font-semibold text-[#18181b] truncate">{item.name}</span>
                           </div>
                         </td>
-                        <td className="py-3 px-3 font-mono text-[#52525b]">
+                        <td className="py-3 px-3 font-mono text-[#52525b] hidden md:table-cell">
                           {item.provider === 'SHIPSTATION'
                             ? (item.status === 'CONNECTED' ? 'Credential configured' : 'Not configured')
                             : item.safeIdentifier}
                         </td>
-                        <td className="py-3 px-3">
+                        <td className="py-3 px-3 hidden md:table-cell">
                           <StatusBadge status={item.status} size="sm" />
                         </td>
-                        <td className="py-3 px-3">
+                        <td className="py-3 px-3 whitespace-nowrap">
                           <StatusBadge status={item.health} size="sm" />
                         </td>
-                        <td className="py-3 px-3 font-mono text-[#71717a]">
+                        <td className="py-3 px-3 font-mono text-[#71717a] hidden sm:table-cell">
                           {item.lastSuccessfulSync
                             ? new Date(item.lastSuccessfulSync).toLocaleString()
                             : 'Never'}
                         </td>
-                        <td className="py-3 px-3 text-right">
+                        <td className="py-3 px-3 text-right hidden sm:table-cell">
                           <Link
                             href={`/integrations/${item.id}`}
                             className="inline-flex items-center gap-1 text-xs text-[#f95721] hover:underline font-medium"
