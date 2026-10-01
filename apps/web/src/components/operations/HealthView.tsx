@@ -163,8 +163,7 @@ export const HealthView: React.FC = () => {
                       <tr key={item.id} className="hover:bg-[#fbfbfa]">
                         <td className="py-3 px-3 max-w-[180px] sm:max-w-none">
                           <div className="flex items-center gap-2 min-w-0">
-                            <ProviderIcon provider={item.provider} />
-                            <span className="font-semibold text-[#18181b] truncate">{item.name}</span>
+                          <ProviderIcon provider={item.provider} size="compact" />
                           </div>
                         </td>
                         <td className="py-3 px-3 font-mono text-[#52525b] hidden md:table-cell">

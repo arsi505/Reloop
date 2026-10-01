@@ -17,6 +17,7 @@ import {
   PlusIcon,
   AlertTriangleIcon,
   CheckIcon,
+  ShieldIcon,
   XIcon,
   IntegrationsIcon,
 } from '../icons/Icons';
@@ -297,8 +298,8 @@ export const IntegrationsView: React.FC = () => {
                       {/* Provider */}
                       <td className="py-3.5 px-4 max-w-[180px] sm:max-w-none">
                         <div className="flex items-center gap-2 min-w-0">
-                          <ProviderIcon provider={item.provider} />
-                          <span className="font-semibold text-[#18181b] truncate">{item.name}</span>
+                          <ProviderIcon provider={item.provider} size="responsive" />
+                          <span className="hidden min-w-0 truncate font-semibold text-[#18181b] sm:block">{item.name}</span>
                         </div>
                       </td>
 
@@ -327,8 +328,9 @@ export const IntegrationsView: React.FC = () => {
 
                       {/* Mode: Strictly Read-Only */}
                       <td className="py-3.5 px-4 hidden lg:table-cell">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#f4f4f5] text-[#52525b] border border-[#e4e4e7]">
-                          Read only
+                        <span title="Read-only access" className="inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md border border-reloop-verified/20 bg-reloop-verified-soft px-2 text-[10px] font-semibold leading-none text-reloop-verified">
+                          <ShieldIcon size={11} />
+                          Read‑only
                         </span>
                       </td>
 
@@ -427,7 +429,7 @@ export const IntegrationsView: React.FC = () => {
           <div className="w-full max-w-md bg-white rounded-xl border border-[#ececeb] shadow-xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-[#f4f4f5] pb-2">
               <div className="flex items-center gap-2">
-                <ProviderIcon provider="SHOPIFY" />
+                <ProviderIcon provider="SHOPIFY" size="compact" />
                 <h4 className="text-sm font-semibold text-[#18181b]">Connect Shopify Store</h4>
               </div>
               <button
@@ -501,7 +503,7 @@ export const IntegrationsView: React.FC = () => {
           <div className="w-full max-w-md bg-white rounded-xl border border-[#ececeb] shadow-xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-[#f4f4f5] pb-2">
               <div className="flex items-center gap-2">
-                <ProviderIcon provider="SHIPSTATION" />
+                <ProviderIcon provider="SHIPSTATION" size="compact" />
                 <h4 className="text-sm font-semibold text-[#18181b]">Connect ShipStation Account</h4>
               </div>
               <button

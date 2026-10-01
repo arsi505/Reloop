@@ -296,14 +296,23 @@ export function ProviderMark({ provider, size = 14 }: { provider: string; size?:
   );
 }
 
-export function ProviderIcon({ provider }: { provider: string }) {
+export function ProviderIcon({ provider, size = 'default' }: { provider: string; size?: 'default' | 'compact' | 'responsive' }) {
+  const compact = size === 'compact';
+  const responsive = size === 'responsive';
+  const baseClass = responsive
+    ? 'inline-flex h-5 items-center gap-1 whitespace-nowrap border border-transparent bg-transparent px-0 text-[10px] font-semibold leading-none sm:rounded sm:border sm:px-1.5'
+    : compact
+    ? 'inline-flex h-5 items-center gap-1 whitespace-nowrap rounded border px-1.5 text-[10px] font-semibold leading-none'
+    : 'inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] font-semibold leading-none';
+  const markSize = compact || responsive ? 11 : 14;
+
   if (provider === 'SHOPIFY') {
     return (
       <span
         title="Shopify"
-        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#86a93e]/25 bg-[#f2f7e8] px-2 py-1 text-[11px] font-semibold leading-none text-[#4f6f1f]"
+        className={`${baseClass} ${responsive ? 'border-transparent bg-transparent text-[#4f6f1f] sm:border-[#86a93e]/25 sm:bg-[#f2f7e8]' : 'border-[#86a93e]/25 bg-[#f2f7e8] text-[#4f6f1f]'}`}
       >
-        <ProviderMark provider={provider} />
+        <ProviderMark provider={provider} size={markSize} />
         Shopify
       </span>
     );
@@ -312,9 +321,9 @@ export function ProviderIcon({ provider }: { provider: string }) {
     return (
       <span
         title="ShipStation"
-        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#1d71b8]/20 bg-[#edf5fb] px-2 py-1 text-[11px] font-semibold leading-none text-[#185d96]"
+        className={`${baseClass} ${responsive ? 'border-transparent bg-transparent text-[#185d96] sm:border-[#1d71b8]/20 sm:bg-[#edf5fb]' : 'border-[#1d71b8]/20 bg-[#edf5fb] text-[#185d96]'}`}
       >
-        <ProviderMark provider={provider} />
+        <ProviderMark provider={provider} size={markSize} />
         ShipStation
       </span>
     );
@@ -324,9 +333,9 @@ export function ProviderIcon({ provider }: { provider: string }) {
     return (
       <span
         title="Test simulator"
-        className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#c9c7bf] bg-[#f3f2ee] px-2 py-1 text-[11px] font-semibold leading-none text-[#55574f]"
+        className={`${baseClass} ${responsive ? 'border-transparent bg-transparent text-[#55574f] sm:border-[#c9c7bf] sm:bg-[#f3f2ee]' : 'border-[#c9c7bf] bg-[#f3f2ee] text-[#55574f]'}`}
       >
-        <ProviderMark provider={provider} />
+        <ProviderMark provider={provider} size={markSize} />
         Test simulator
       </span>
     );
@@ -336,7 +345,7 @@ export function ProviderIcon({ provider }: { provider: string }) {
   return (
     <span
       title={displayName}
-      className="inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-zinc-200 bg-zinc-100 px-2 py-1 text-[11px] font-semibold leading-none text-zinc-600"
+      className={`${baseClass} ${responsive ? 'border-transparent bg-transparent text-zinc-600 sm:border-zinc-200 sm:bg-zinc-100' : 'border-zinc-200 bg-zinc-100 text-zinc-600'}`}
     >
       <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
       {displayName}
