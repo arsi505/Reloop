@@ -8,9 +8,43 @@
 [![Redis](https://img.shields.io/badge/Redis-7-red.svg)](https://redis.io/)
 [![Release](https://img.shields.io/badge/Release-v1.0.0-brightgreen.svg)](https://github.com/arsi505/Reloop/tree/v1.0.0)
 
+> **Student portfolio project** — Reloop explores how multi-channel e-commerce discrepancies can be detected, reviewed, recovered safely, and independently verified. It was built to demonstrate reliable distributed-system design rather than to claim production SaaS readiness.
+
 > **Core Operating Invariant:**
 > `CHECK -> GATE / APPROVAL -> EXECUTE -> VERIFY -> RESOLVED`
 > Reloop never mutates upstream state blindly, never assumes eventual consistency resolved an error, and never marks an incident resolved until independent cross-system verification confirms total agreement.
+
+---
+
+## At a Glance
+
+- **Problem:** Shopify, ShipStation, and warehouse data can diverge when webhooks arrive late, retries fail, or upstream state changes independently.
+- **Approach:** Reconcile provider state, turn mismatches into explicit recovery cases, apply approval gates to risky actions, and verify every outcome before resolution.
+- **Built to demonstrate:** multi-tenant API design, durable job processing, idempotent workflows, PostgreSQL-backed leases, provider adapters, realtime UI invalidation, and auditability.
+- **V1 safety boundary:** live provider integrations are read-only. Automated recovery writes are simulator-backed demonstrations, so no real Shopify or ShipStation records are changed.
+
+## Run It Locally
+
+```bash
+git clone https://github.com/arsi505/Reloop.git
+cd Reloop
+npm install
+cp .env.example .env
+docker compose up -d
+npm run db:migrate
+```
+
+Then seed the synthetic demo data and start the API and dashboard:
+
+```bash
+npx dotenv -e .env -e .env.example -- npx ts-node scripts/seed-rich-demo-data.ts
+npm run dev --workspace=@reloop/api
+npm run dev --workspace=@reloop/web
+```
+
+Open `http://localhost:3100/login` and sign in with `operator@reloop.test` / `Password123!`. The complete setup, optional services, and troubleshooting context are in [Detailed Local Setup](#7-detailed-local-setup).
+
+![Reloop operations dashboard](docs/assets/screenshots/02-dashboard-overview.png)
 
 ---
 
@@ -24,6 +58,13 @@ At integration boundaries, failure is inevitable:
 - **Silent Desynchronization**: A customer service agent cancels an order in Shopify while a 3PL worker is packing it on the warehouse floor; the parcel ships anyway.
 
 **Reloop provides a dedicated reliability and recovery layer for multi-channel commerce.** It ingests authenticated provider events and triggered sync results, reconciles cross-system entities against a single operational truth, isolates discrepancies into explicit **Recovery Cases**, orchestrates multi-step **DAG Workflows**, halts hazardous actions behind **Human Operator Approval Gates**, and durably records every state transition in an append-only **Flight Recorder**.
+
+### Key Engineering Decisions
+
+- **PostgreSQL is authoritative:** recovery state, leases, audit records, and tenant data are durable relational records—not queue state.
+- **Redis coordinates work:** Streams and Pub/Sub accelerate dispatch and realtime invalidation, but are intentionally not the source of truth.
+- **Risk requires a human gate:** high-impact actions are paused for an authenticated operator rather than retried automatically.
+- **Resolution requires evidence:** an action is not considered complete until a separate provider read verifies that the expected state now agrees.
 
 ---
 
@@ -237,7 +278,7 @@ reloop/
 
 ---
 
-## 7. Zero-to-Running Local Quickstart
+## 7. Detailed Local Setup
 
 ### Prerequisites
 - **Node.js**: v20.x, v22.x, or v24 LTS
@@ -422,6 +463,12 @@ The following capabilities are deliberately outside the scope of Reloop V1:
 - [Shopify Integration](docs/shopify-integration.md): OAuth, signed webhook, read-sync, and read-only safety boundaries.
 - [ShipStation Integration](docs/shipstation-integration.md): API-key authentication, triggered read-sync, reconciliation, and write fences.
 - [Portfolio & Engineering Notes](docs/portfolio-notes.md): Technical deep-dive and architectural rationale for interviews.
+
+---
+
+## Academic Context
+
+Reloop is a student portfolio project focused on the engineering trade-offs behind safe recovery automation: designing for idempotency, making durable state explicit, handling uncertain external-system outcomes, and keeping human operators in control of risky changes. The implementation and benchmark results should be evaluated as V1, local-development evidence rather than claims of hosted production capacity.
 
 ---
 
