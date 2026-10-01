@@ -237,20 +237,6 @@ Reloop includes an operational web UI built with **Next.js 15.5 App Router**, **
 
 ---
 
-### Operations Dashboard Overview
-![Dashboard Overview](docs/assets/screenshots/02-dashboard-overview.png)
-
-### Exception Management Queue
-![Exception Queue](docs/assets/screenshots/03-exceptions-queue.png)
-
-### Recovery Case, Human Approval Gate & Flight Recorder
-![Recovery Detail](docs/assets/screenshots/04-recovery-detail.png)
-
-### Cross-System Order Reconciliation Table
-![Orders Reconciliation](docs/assets/screenshots/05-orders-reconciliation.png)
-
----
-
 ## 6. Monorepo Structure
 
 The project is structured as an npm monorepo with 14 cohesive, decoupled workspaces:
