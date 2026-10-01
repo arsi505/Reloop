@@ -28,12 +28,14 @@ import {
 
 interface DashboardViewProps {
   userName: string;
+  onOpenExceptionsCountChange?: (count: number) => void;
   onInspectException?: (id: string) => void;
   onInspectWorkflow?: (id: string) => void;
 }
 
 export function DashboardView({
   userName,
+  onOpenExceptionsCountChange,
   onInspectException,
   onInspectWorkflow,
 }: DashboardViewProps) {
@@ -61,6 +63,7 @@ export function DashboardView({
         apiClient.getIntegrations().catch(() => [] as IntegrationCardDto[]),
       ]);
       setSummary(summaryRes);
+      onOpenExceptionsCountChange?.(summaryRes.openExceptionsCount);
       setIntegrations(integrationsRes);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to load dashboard data';
@@ -72,7 +75,7 @@ export function DashboardView({
     } finally {
       setLoadingSummary(false);
     }
-  }, []);
+  }, [onOpenExceptionsCountChange]);
 
   const fetchQueue = useCallback(async (filter: 'ALL' | 'WAITING_APPROVAL' | 'BLOCKED' | 'INVESTIGATING') => {
     setLoadingQueue(true);
@@ -373,7 +376,7 @@ export function DashboardView({
                         </td>
                         <td className="py-3 px-4">
                           {item.provider ? (
-                            <ProviderIcon provider={item.provider} />
+                            <ProviderIcon provider={item.provider} size="responsive" />
                           ) : (
                             <span className="text-[#a1a1aa]">—</span>
                           )}
@@ -488,7 +491,7 @@ export function DashboardView({
                       className="p-2.5 rounded-lg bg-[#fbfbfa] border border-[#ececeb] flex items-center justify-between gap-2"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <ProviderIcon provider={integ.provider} />
+                        <ProviderIcon provider={integ.provider} size="responsive" />
                         <div className="min-w-0">
                           <p className="font-medium text-xs text-[#18181b] truncate">
                             {integ.name}

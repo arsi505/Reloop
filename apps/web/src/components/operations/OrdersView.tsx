@@ -306,9 +306,9 @@ export function OrdersView({ onInspectOrder }: OrdersViewProps) {
                         {order.currency || 'USD'} {order.totalAmount || '0.00'}
                       </td>
                       <td className="py-3 px-4">
-                        <div className="flex gap-1.5">
+                        <div className="flex min-w-0 flex-wrap gap-1">
                           {order.connectedProviders.map((p) => (
-                            <ProviderIcon key={p} provider={p} />
+                            <ProviderIcon key={p} provider={p} size="responsive" />
                           ))}
                         </div>
                       </td>
